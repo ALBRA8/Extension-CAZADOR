@@ -1,0 +1,117 @@
+/* =========================================================
+   Cazador — Estilos globales
+   Identidad visual: diana 🎯 + degradado verde-cian-amarillo-naranja
+   ========================================================= */
+
+:root {
+  /* Palette */
+  --cz-green: #2ee59d;
+  --cz-teal: #00c2c7;
+  --cz-cyan: #22b8ff;
+  --cz-yellow: #ffd93d;
+  --cz-orange: #ff9f43;
+  --cz-pink: #ff5e7e;
+  --cz-violet: #845ef7;
+
+  /* Surfaces */
+  --bg: #f7f9fc;
+  --surface: #ffffff;
+  --surface-2: #f1f4f9;
+  --border: #e4e8f0;
+  --text: #0d1b2a;
+  --text-muted: #5a6b7e;
+  --text-soft: #8b97a8;
+
+  /* Status */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+
+  /* Typography */
+  --font-sans: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(13, 27, 42, 0.05);
+  --shadow-md: 0 4px 12px rgba(13, 27, 42, 0.08);
+  --shadow-lg: 0 10px 30px rgba(13, 27, 42, 0.12);
+
+  /* Gradient (logo & accents) */
+  --gradient-brand: linear-gradient(
+    100deg,
+    var(--cz-green) 0%,
+    var(--cz-teal) 25%,
+    var(--cz-cyan) 50%,
+    var(--cz-yellow) 75%,
+    var(--cz-orange) 100%
+  );
+  --gradient-brand-soft: linear-gradient(
+    100deg,
+    rgba(46, 229, 157, 0.12) 0%,
+    rgba(34, 184, 255, 0.12) 50%,
+    rgba(255, 159, 67, 0.12) 100%
+  );
+
+  /* Spacing scale */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cfd8e3;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b3c0d2;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

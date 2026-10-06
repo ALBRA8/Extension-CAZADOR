@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Cazador — AI Web Scraper",
+  "version": "0.1.0",
+  "description": "Cazador — Scrapea cualquier web con IA en 2 clics. Sugerencia automática de columnas, créditos transparentes y export a CSV/Excel.",
+  "default_locale": "es",
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "Abrir Cazador"
+  },
+  "side_panel": {
+    "default_path": "sidebar.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8787 http://localhost:3000 https://*"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://app.dropi.co/*",
+        "https://app.dropi.mx/*",
+        "https://app.dropi.pe/*",
+        "https://app.dropi.cl/*",
+        "https://app.dropi.ec/*",
+        "https://app.dropi.ar/*",
+        "https://app.dropi.com.py/*",
+        "https://app.dropi.com.ve/*",
+        "https://app.dropi.gt/*",
+        "https://app.dropi.cr/*",
+        "https://app.dropi.pa/*"
+      ],
+      "js": ["dropi-interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://app.dropi.co/*",
+        "https://app.dropi.mx/*",
+        "https://app.dropi.pe/*",
+        "https://app.dropi.cl/*",
+        "https://app.dropi.ec/*",
+        "https://app.dropi.ar/*",
+        "https://app.dropi.com.py/*",
+        "https://app.dropi.com.ve/*",
+        "https://app.dropi.gt/*",
+        "https://app.dropi.cr/*",
+        "https://app.dropi.pa/*"
+      ],
+      "js": ["dropi-interceptor.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

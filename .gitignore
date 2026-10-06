@@ -1,0 +1,39 @@
+# Dependencies
+**/node_modules/
+
+# Build outputs
+extension/dist/
+landing/dist/
+dashboard/dist/
+server/node_modules/
+
+# Environment
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+dev.log
+server.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# DB
+*.db
+*.db-journal
+
+# Cache
+.vite/
+.turbo/
+.next/
+
+# Agent context (private logs)
+agent-ctx/

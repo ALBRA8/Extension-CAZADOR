@@ -1,0 +1,14 @@
+{
+  "name": "cazador-server",
+  "version": "0.1.0",
+  "description": "Backend local para la extensión Cazador — usa z-ai-web-dev-sdk (GLM) para sugerir columnas y scrapear.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "z-ai-web-dev-sdk": "latest"
+  }
+}

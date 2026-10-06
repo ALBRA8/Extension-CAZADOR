@@ -1,0 +1,104 @@
+// Pure helpers shared between the JVZoo content extractor and the
+// background service worker. No chrome.* side effects (no listeners, no
+// chrome.storage access) so it is safe to import from both the content-script
+// IIFE bundle and the service-worker module bundle without leaking listeners.
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+export interface JVZooProduct {
+  title: string
+  price: string
+  units_sold: number
+  vendor: string
+  image_url: string
+  detail_url: string
+}
+
+export interface JVZooExtractResult {
+  url: string
+  title: string
+  pageText: string
+  detectedItems: number
+  jvzooProducts: JVZooProduct[]
+}
+
+// ─── Field definitions (mirrors extension/src/types/index.ts FieldDefinition) ──
+
+export interface FieldDefinition {
+  id: string
+  name: string
+  type:
+    | 'text'
+    | 'number'
+    | 'price'
+    | 'date'
+    | 'url'
+    | 'email'
+    | 'phone'
+    | 'image'
+    | 'longtext'
+    | 'boolean'
+    | 'score'
+  hint?: string
+  source: 'ai' | 'user'
+}
+
+// ─── URL detection ──────────────────────────────────────────────────────────
+
+const JVZOO_RE = /^https?:\/\/(?:www\.)?jvzoomarket\.com(?:\/|$)/i
+
+export function isJVZooUrl(url: string): boolean {
+  if (!url) return false
+  return JVZOO_RE.test(url)
+}
+
+// ─── Suggestion builder ─────────────────────────────────────────────────────
+
+const slug = (s: string): string =>
+  String(s || 'field')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 20) || 'field'
+
+const JVZOO_FIELD_SPECS: Array<{
+  name: string
+  type: FieldDefinition['type']
+  hint: string
+}> = [
+  { name: 'Título', type: 'text', hint: 'Descripción / título del producto JVZoo' },
+  { name: 'Precio', type: 'price', hint: 'Precio en USD (ej. 24.95)' },
+  { name: 'Unidades Vendidas', type: 'number', hint: 'Número de unidades vendidas (badge "NNN Sold")' },
+  { name: 'Vendor', type: 'text', hint: 'Vendedor (texto tras "Sold By")' },
+  { name: 'Imagen', type: 'image', hint: 'URL absoluta de la imagen (card-img-top)' },
+  { name: 'URL Detalle', type: 'url', hint: 'Ruta absoluta a la página de detalle (/productlibrary/review/{id})' },
+]
+
+/**
+ * Build a `SUGGEST_FIELDS_RESULT` payload directly from the structured JVZoo
+ * products array, skipping the AI backend call entirely. Fields are 100%
+ * accurate because they come from JVZoo's own server-rendered HTML cards.
+ */
+export function buildJVZooSuggestion(products: JVZooProduct[]): {
+  fields: FieldDefinition[]
+  pageCategory: string
+  estimatedRows: number
+  reasoning?: string
+} {
+  const fields: FieldDefinition[] = JVZOO_FIELD_SPECS.map((spec, i) => ({
+    id: `f_${i}_${slug(spec.name)}`,
+    name: spec.name,
+    type: spec.type,
+    hint: spec.hint,
+    source: 'ai' as const,
+  }))
+  return {
+    fields,
+    pageCategory: 'JVZoo Marketplace',
+    estimatedRows: products.length,
+    reasoning:
+      'Extractor especializado JVZoo: datos extraídos directamente de div.home-review-card (sin IA). 100% precisión; sin consumo de créditos en la fase de sugerencia.',
+  }
+}
