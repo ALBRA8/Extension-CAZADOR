@@ -233,10 +233,37 @@ const ISO_CODES = new Set([
  * la moneda. Esto es deliberado: el sidebar debe mostrar el precio tal cual lo
  * vio el usuario (sin riesgo de mal interpretar separador de miles vs decimal).
  *
+ * Prioridad de detección de moneda:
+ * 1. `currencyHint` (si el caller lo pasa — ej. JSON-LD `priceCurrency: "USD"`
+ *    se pasa directo, sin necesidad de adivinar). Se usa tal cual.
+ * 2. ISO 4217 explícito en el texto (ej. "USD", "COP", "BRL"). Gana sobre el
+ *    símbolo ambiguo `$` incluso si el `countryHint` sugiere otra moneda.
+ * 3. Símbolos multi-char (R$, US$, €, £, etc.) — directo desde el mapa.
+ * 4. Símbolo `$` solitario (ambiguo) — desambiguado por `countryHint` vía
+ *    `currencySymbolToCode('$', countryHint)`. Si `countryHint` es undefined,
+ *    se asume `USD` (default — **NO fiable**, llamar con countryHint para
+ *    reducir ambigüedad).
+ *
  * Devuelve { amount: '', currency: undefined } para entradas vacías o sin
  * ningún dígito.
+ *
+ * Backwards compatible: `parsePrice(raw)` (1 arg) sigue funcionando y devuelve
+ * `USD` para `$` sin contexto (default documentado como no fiable).
+ *
+ * @param raw          Texto crudo con el precio (ej. "$29.99", "R$ 89,90").
+ * @param countryHint  Código ISO país de 2 letras (ej. 'CO', 'BR', 'MX') para
+ *                     desambiguar el símbolo `$`. Se obtiene típicamente vía
+ *                     `detectCountry(doc, url)`.
+ * @param currencyHint Código ISO 4217 directo (ej. 'USD', 'COP'). Si se pasa,
+ *                     se usa directamente y se salta toda la detección. Es lo
+ *                     que debe pasar el extractor de JSON-LD cuando tiene
+ *                     `Product.offers.priceCurrency` del Schema.org.
  */
-export function parsePrice(raw: string): { amount: string; currency?: string } {
+export function parsePrice(
+  raw: string,
+  countryHint?: string,
+  currencyHint?: string,
+): { amount: string; currency?: string } {
   if (raw == null) return { amount: '', currency: undefined }
   const text = String(raw).trim()
   if (!text) return { amount: '', currency: undefined }
@@ -244,19 +271,41 @@ export function parsePrice(raw: string): { amount: string; currency?: string } {
   let currency: string | undefined
   let workText = text
 
+  // 0. Si el caller pasa `currencyHint` (ej. priceCurrency del JSON-LD),
+  //    usarlo directamente y saltar la detección.
+  if (currencyHint && typeof currencyHint === 'string') {
+    const hint = currencyHint.trim().toUpperCase()
+    if (hint && ISO_CODES.has(hint)) {
+      currency = hint
+      // Strip el código del texto si está presente, para que no termine
+      // en el amount (ej. "USD 29.99" → amount "29.99", no "29.99" con USD colado).
+      workText = text.replace(new RegExp(`\\b${hint}\\b`, 'g'), ' ')
+    } else if (hint) {
+      // Hint no está en ISO_CODES — lo aceptamos igual (podría ser un código
+      // exótico que no conocemos). El caller sabe lo que hace.
+      currency = hint
+      workText = text.replace(new RegExp(`\\b${hint}\\b`, 'g'), ' ')
+    }
+  }
+
   // 1. Detectar código ISO 4217 explícito (3 letras A-Z) en cualquier posición.
-  const isoMatch = text.match(/\b([A-Z]{3})\b/g)
-  if (isoMatch) {
-    for (const candidate of isoMatch) {
-      if (ISO_CODES.has(candidate.toUpperCase())) {
-        currency = candidate.toUpperCase()
-        workText = text.replace(candidate, ' ')
-        break
+  //    Solo si no hay currencyHint (este tiene prioridad).
+  if (!currency) {
+    const isoMatch = text.match(/\b([A-Z]{3})\b/g)
+    if (isoMatch) {
+      for (const candidate of isoMatch) {
+        if (ISO_CODES.has(candidate.toUpperCase())) {
+          currency = candidate.toUpperCase()
+          workText = text.replace(candidate, ' ')
+          break
+        }
       }
     }
   }
 
-  // 2. Si no se encontró ISO, intentar símbolos (R$, US$, €, £, etc.).
+  // 2. Si no se encontró ISO (ni currencyHint), intentar símbolos
+  //    (R$, US$, €, £, etc.). Para el símbolo `$` solitario (ambiguo),
+  //    usar `currencySymbolToCode('$', countryHint)` para desambiguar por país.
   if (!currency) {
     // Multi-char symbols primero (R$, US$, CA$, etc.) para no perder el "US"
     // ante un $ solitario. El símbolo puede ir al inicio (con o sin espacios
@@ -271,7 +320,12 @@ export function parsePrice(raw: string): { amount: string; currency?: string } {
       const startRe = new RegExp(`^${escaped}\\s*`, 'i')
       // \s*symbol$  →  el símbolo está al final del texto.
       const endRe = new RegExp(`\\s*${escaped}$`, 'i')
-      const code = SYMBOL_TO_CODE[sym.toLowerCase()]
+      // Para el `$` solitario, desambiguar por país en vez de usar el
+      // default 'USD' del mapa estático. Para los demás símbolos, usar
+      // el mapa directo.
+      const code = sym === '$'
+        ? currencySymbolToCode('$', countryHint)
+        : SYMBOL_TO_CODE[sym.toLowerCase()]
       if (!code) continue
       if (startRe.test(workText)) {
         currency = code
@@ -365,6 +419,117 @@ export function currencySymbolToCode(
   // Última oportunidad: parsear el texto completo por si vino "USD 29.99".
   const { currency } = parsePrice(trimmed)
   return currency
+}
+
+// ─── Country detection (iter2 — bug fix para parsePrice con `$` ambiguo) ──
+
+/**
+ * TLDs de URL que indican país. Mapeado a código ISO 3166-1 alpha-2.
+ *
+ * Solo incluimos TLDs inequívocos: `.com.co` siempre es Colombia, `.com.br`
+ * siempre es Brasil, etc. Excluimos `.com` a secas porque es global
+ * (mayormente US pero no confiable).
+ */
+const TLD_TO_COUNTRY: ReadonlyArray<[string, string]> = [
+  ['com.co', 'CO'],
+  ['com.br', 'BR'],
+  ['com.mx', 'MX'],
+  ['com.ar', 'AR'],
+  ['com.pe', 'PE'],
+  ['com.cl', 'CL'],
+  ['co.uk', 'GB'],
+]
+
+/**
+ * Detecta el país de una página web combinando múltiples signals HTML.
+ *
+ * Signals consultadas en orden de prioridad (la primera que matchea gana):
+ * 1. `<html lang="es-CO">` → extrae el subtag del país (`CO`).
+ *    También acepta `pt-BR`, `en-US`, `es-MX`, etc. Caso-insensitive.
+ * 2. `<meta name="region" content="MX">` → contenido directo (2 letras).
+ * 3. `<meta property="og:locale" content="es_CO">` → extrae el subtag
+ *    del país tras `_` o `-`.
+ * 4. TLD de la URL: `.com.co` → CO, `.com.br` → BR, etc. (ver
+ *    `TLD_TO_COUNTRY`).
+ *
+ * Si ninguna signal matchea, devuelve `undefined`. El caller debe propagar
+ * este `undefined` a `parsePrice(raw, countryHint)` — en ese caso
+ * `parsePrice` aplicará el default `USD` para el símbolo `$` (default no
+ * fiable, documentado).
+ *
+ * Nota sobre JSON-LD `Product.offers.priceCurrency`: NO se extrae aquí. Si
+ * el extractor de JSON-LD tiene ese campo, debe pasarlo directo como
+ * `currencyHint` a `parsePrice` (3er parámetro), saltándose la detección
+ * por país.
+ *
+ * @param doc  Documento HTML (en el browser es `document`; en tests se
+ *             puede construir con `new DOMParser().parseFromString(html,
+ *             'text/html')` o `jsdom`'s `Document`).
+ * @param url  URL de la página (se parsea para extraer el TLD).
+ * @returns Código ISO 3166-1 alpha-2 (ej. 'CO', 'BR', 'MX') o `undefined`.
+ */
+export function detectCountry(doc: Document, url: string): string | undefined {
+  if (!doc || typeof doc !== 'object') return undefined
+
+  // 1. <html lang="es-CO"> — extraer subtag del país.
+  //    Formatos aceptados: "es-CO", "pt-BR", "es-MX", "en-US", "es_co", etc.
+  const htmlEl = doc.documentElement
+  if (htmlEl) {
+    const lang = htmlEl.getAttribute('lang') || ''
+    if (lang) {
+      // Buscar "-XX" o "_XX" donde XX son exactamente 2 letras al final.
+      // Caso-insensitive para tolerar "es-co", "ES-CO", etc.
+      const m = lang.match(/[-_]([a-zA-Z]{2})(?:[^a-zA-Z]|$)/)
+      if (m) {
+        const country = m[1].toUpperCase()
+        // Validar que sea 2 letras mayúsculas exactas.
+        if (/^[A-Z]{2}$/.test(country)) return country
+      }
+    }
+  }
+
+  // 2. <meta name="region" content="MX"> — contenido directo (2 letras).
+  const region = doc.querySelector('meta[name="region" i]')
+  if (region) {
+    const content = (region.getAttribute('content') || '').trim()
+    if (/^[a-zA-Z]{2}$/.test(content)) {
+      return content.toUpperCase()
+    }
+  }
+
+  // 3. <meta property="og:locale" content="es_CO"> — extraer subtag del país.
+  const ogLocale = doc.querySelector('meta[property="og:locale" i]')
+  if (ogLocale) {
+    const content = (ogLocale.getAttribute('content') || '').trim()
+    if (content) {
+      // "es_CO" → "CO", "pt-BR" → "BR", "es-419" → no (419 no son 2 letras).
+      const m = content.match(/[-_]([a-zA-Z]{2})$/)
+      if (m) {
+        const country = m[1].toUpperCase()
+        if (/^[A-Z]{2}$/.test(country)) return country
+      }
+    }
+  }
+
+  // 4. TLD de la URL.
+  if (url && typeof url === 'string') {
+    try {
+      const u = new URL(url)
+      let host = u.hostname.toLowerCase()
+      // Strip "www." prefix si existe (no cambia el TLD pero simplifica).
+      if (host.startsWith('www.')) host = host.slice(4)
+      for (const [tld, country] of TLD_TO_COUNTRY) {
+        // Match exacto del host o sufijo con punto (ej. ".com.co").
+        if (host === tld || host.endsWith('.' + tld)) {
+          return country
+        }
+      }
+    } catch {
+      // URL inválida → no podemos extraer TLD, seguir.
+    }
+  }
+
+  return undefined
 }
 
 // ─── Image validation ───────────────────────────────────────────────────────
