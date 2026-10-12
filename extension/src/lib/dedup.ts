@@ -272,6 +272,21 @@ function collectSources(stored: string | undefined, set: Set<string>): void {
   }
 }
 
+// ─── Helpers de variantes (iter3 — bug fix variantes con SKU padre) ─────────
+
+/**
+ * Devuelve true si el producto tiene al menos una variante declarada.
+ * Usado por `dedupPass` (con `skipIfVariants: true`) para evitar fusionar
+ * dos productos que comparten SKU pero donde al menos uno tiene `variants`
+ * no vacío — podrían ser padres ProductGroup distintos con el mismo
+ * `productGroupID`, o un padre estructurado y una card del DOM con SKU
+ * coincidente. La política es conservadora: si hay variantes, no fusionamos
+ * por SKU solo.
+ */
+function hasVariants(p: StructuredProduct | null | undefined): boolean {
+  return !!(p && Array.isArray(p.variants) && p.variants.length > 0)
+}
+
 // ─── Pasada de dedup (una pasada con un solo tipo de clave) ────────────────
 
 /**
@@ -284,13 +299,24 @@ function collectSources(stored: string | undefined, set: Set<string>): void {
  * Preserva el orden de inserción: el resultado sigue el orden original,
  * con los duplicados colapsados a la posición del primero.
  *
+ * Opciones:
+ *  - `skipIfVariants` (default `false`): cuando es true, si el producto
+ *    actual o el existente en el bucket tiene `variants.length > 0`, NO se
+ *    fusionan — ambos se conservan como productos separados. La política
+ *    es que dos productos con variantes declaradas y mismo SKU no son
+ *    necesariamente el mismo producto (podrían ser padres ProductGroup
+ *    distintos con el mismo `productGroupID`). Solo se aplica a la pasada
+ *    SKU — la pasada URL y la combo siguen deduplicando normalmente.
+ *
  * Retorna el array resultante y suma al contador de descartes.
  */
 function dedupPass(
   products: StructuredProduct[],
   keyFn: (p: StructuredProduct) => string | null,
   discardedRef: { count: number },
+  options?: { skipIfVariants?: boolean },
 ): StructuredProduct[] {
+  const skipIfVariants = options?.skipIfVariants === true
   const buckets = new Map<string, StructuredProduct>()
   const result: StructuredProduct[] = []
 
@@ -306,6 +332,18 @@ function dedupPass(
     const existing = buckets.get(key)
     if (!existing) {
       buckets.set(key, product)
+      result.push(product)
+      continue
+    }
+
+    // iter3 — bug fix variantes: si cualquiera de los dos productos tiene
+    // variants declaradas, NO se deduplican aunque compartan SKU. Razón:
+    // un padre ProductGroup con `hasVariant` puede compartir `productGroupID`
+    // con otro padre distinto, o con una card del DOM que salió del mismo
+    // ProductGroup. La presunción de "mismo SKU = mismo producto" solo es
+    // válida cuando ninguno de los dos tiene variants anidadas.
+    if (skipIfVariants && (hasVariants(existing) || hasVariants(product))) {
+      // Conservar ambos como productos separados — no tocar el bucket.
       result.push(product)
       continue
     }
@@ -394,13 +432,17 @@ export function dedupProducts(products: StructuredProduct[]): {
 
   const discardedRef = { count: 0 }
 
-  // Pasada 1: SKU (con source).
+  // Pasada 1: SKU (con source) — skip si cualquiera tiene variants.
+  //   Política iter3: dos productos con variantes declaradas y mismo SKU no
+  //   son necesariamente el mismo producto (podrían ser padres
+  //   ProductGroup distintos con el mismo `productGroupID`). Solo se
+  //   deduplican por SKU si ninguno de los dos tiene `variants` no vacío.
   let working = dedupPass(validProducts, (p) => {
     const sku = normalizeSku(p.sku)
     if (!sku) return null
     const source = getSource(p)
     return `sku:${source}:${sku}`
-  }, discardedRef)
+  }, discardedRef, { skipIfVariants: true })
 
   // Pasada 2: URL (con source).
   working = dedupPass(working, (p) => {

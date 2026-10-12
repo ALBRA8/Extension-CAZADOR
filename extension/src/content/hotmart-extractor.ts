@@ -151,7 +151,7 @@ function readNextData(): any | null {
   try {
     return JSON.parse(raw)
   } catch (e) {
-    console.warn('[hotmart-extractor] __NEXT_DATA__ JSON.parse failed:', e)
+    console.warn('[hhotmart-extractor] __NEXT_DATA__ JSON.parse failed:', e)
     return null
   }
 }
@@ -404,7 +404,7 @@ async function fetchHotmartPrice(ref: string): Promise<string> {
   if (!ref) return ''
   // Defense-in-depth: validate ref before interpolating into URL.
   if (!HOTMART_REF_RE.test(ref)) {
-    console.warn(`[hotmart-extractor] invalid ref format: ${ref}`)
+    console.warn(`[hhotmart-extractor] invalid ref format: ${ref}`)
     return ''
   }
   const url = `https://pay.hotmart.com/${ref}`
@@ -419,7 +419,7 @@ async function fetchHotmartPrice(ref: string): Promise<string> {
       signal: controller.signal,
     })
     if (!res.ok) {
-      console.warn(`[hotmart-extractor] pay.hotmart.com ${ref} -> HTTP ${res.status}`)
+      console.warn(`[hhotmart-extractor] pay.hotmart.com ${ref} -> HTTP ${res.status}`)
       return ''
     }
     const html = await res.text()
@@ -450,9 +450,9 @@ async function fetchHotmartPrice(ref: string): Promise<string> {
     return price
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
-      console.warn(`[hotmart-extractor] fetchHotmartPrice(${ref}) timed out after ${HOTMART_PRICE_FETCH_TIMEOUT_MS / 1000}s`)
+      console.warn(`[hhotmart-extractor] fetchHotmartPrice(${ref}) timed out after ${HOTMART_PRICE_FETCH_TIMEOUT_MS / 1000}s`)
     } else {
-      console.warn(`[hotmart-extractor] fetchHotmartPrice(${ref}) failed:`, e)
+      console.warn(`[hhotmart-extractor] fetchHotmartPrice(${ref}) failed:`, e)
     }
     return ''
   } finally {

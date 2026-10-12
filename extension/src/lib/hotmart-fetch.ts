@@ -107,7 +107,7 @@ export function parseHotmartPriceHtml(html: string): string {
  * price element in the response HTML).
  *
  * Never throws — all errors are caught and logged to `console.warn` with a
- * `[hotmart-fetch]` prefix for easy triage.
+ * `[hhotmart-fetch]` prefix for easy triage.
  *
  * @param ref      Hotmart producer reference code (validated against
  *                 `^[A-Za-z0-9_-]+$`). Empty string short-circuits to ''.
@@ -123,13 +123,13 @@ export async function fetchHotmartPrice(
   // codes are alphanumeric (e.g. `QKZ9X7H3K`). Reject anything else so a
   // caller can't accidentally hit `pay.hotmart.com/../../admin`.
   if (!HOTMART_REF_RE.test(ref)) {
-    console.warn(`[hotmart-fetch] invalid ref format: ${ref}`)
+    console.warn(`[hhotmart-fetch] invalid ref format: ${ref}`)
     return ''
   }
 
   const fetchImpl = options?.fetchImpl ?? globalThis.fetch
   if (typeof fetchImpl !== 'function') {
-    console.warn('[hotmart-fetch] no fetch implementation available')
+    console.warn('[hhotmart-fetch] no fetch implementation available')
     return ''
   }
 
@@ -166,7 +166,7 @@ export async function fetchHotmartPrice(
     })
     if (!res || !res.ok) {
       const status = res && typeof res.status === 'number' ? res.status : '?'
-      console.warn(`[hotmart-fetch] pay.hotmart.com ${ref} -> HTTP ${status}`)
+      console.warn(`[hhotmart-fetch] pay.hotmart.com ${ref} -> HTTP ${status}`)
       return ''
     }
     const html = await res.text()
@@ -175,11 +175,11 @@ export async function fetchHotmartPrice(
     // Distinguish timeout (our internal signal) vs caller abort vs other.
     const isTimeout = timeoutId !== undefined && controller?.signal?.aborted === true
     if (isTimeout && !(externalSignal?.aborted)) {
-      console.warn(`[hotmart-fetch] fetchHotmartPrice(${ref}) timed out after ${HOTMART_PRICE_FETCH_TIMEOUT_MS / 1000}s`)
+      console.warn(`[hhotmart-fetch] fetchHotmartPrice(${ref}) timed out after ${HOTMART_PRICE_FETCH_TIMEOUT_MS / 1000}s`)
     } else if (e instanceof DOMException && e.name === 'AbortError') {
-      console.warn(`[hotmart-fetch] fetchHotmartPrice(${ref}) aborted`)
+      console.warn(`[hhotmart-fetch] fetchHotmartPrice(${ref}) aborted`)
     } else {
-      console.warn(`[hotmart-fetch] fetchHotmartPrice(${ref}) failed:`, e)
+      console.warn(`[hhotmart-fetch] fetchHotmartPrice(${ref}) failed:`, e)
     }
     return ''
   } finally {
