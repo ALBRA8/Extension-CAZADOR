@@ -444,23 +444,33 @@ export function dedupProducts(products: StructuredProduct[]): {
     return `sku:${source}:${sku}`
   }, discardedRef, { skipIfVariants: true })
 
-  // Pasada 2: URL (con source).
+  // Pasada 2: URL (con source) — skip si cualquiera tiene variants.
+  //   Política iter3 (corrección post-revisión): dos productos que comparten
+  //   URL pero tienen variants distintas no son necesariamente el mismo
+  //   producto (la URL puede ser la ficha del ProductGroup padre, con
+  //   variants que difieren entre extractores o entre snapshots).
+  //   Sin este skip, las variants del descartado se pierden silenciosamente
+  //   porque `mergeExtras` solo toca `extras`, no `variants`.
   working = dedupPass(working, (p) => {
     if (!p.productUrl) return null
     const url = normalizeProductUrl(p.productUrl)
     if (!url) return null
     const source = getSource(p)
     return `url:${source}:${url}`
-  }, discardedRef)
+  }, discardedRef, { skipIfVariants: true })
 
   // Pasada 3: combo (sin source — cross-platform match es válido aquí).
+  //   Skip si cualquiera tiene variants — mismo motivo que las pasadas
+  //   anteriores. Si dos productos tienen variants distintas y matchean
+  //   por combo sin SKU/URL, son probablemente variantes hermanas del
+  //   mismo padre, no duplicados verdaderos.
   working = dedupPass(working, (p) => {
     const name = normalizeName(p.name)
     const brand = normalizeName(p.brand)
     const price = normalizePrice(p.price)
     if (!name || !brand || !price) return null
     return `combo:${name}|${brand}|${price}`
-  }, discardedRef)
+  }, discardedRef, { skipIfVariants: true })
 
   return { deduped: working, discardedCount: discardedRef.count + nullCount }
 }

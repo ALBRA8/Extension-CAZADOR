@@ -349,15 +349,15 @@ describe('iter3 — dedup de variantes con SKU padre', () => {
     expect(result.deduped[1].extras).toEqual({ reviews: '100' })
   })
 
-  // ─── Caso 8: jerarquía de 3 pasadas conservada ───────────────────────────
-  it('Jerarquía: URL deduplica normalmente aunque un producto tenga variants', () => {
-    // El skip solo aplica a la pasada SKU. Si dos productos comparten URL
-    // pero tienen variants, la pasada URL debe deduplicarlos (asumiendo
-    // que la misma URL = misma ficha de producto).
+  // ─── Caso 8: jerarquía de 3 pasadas con skipIfVariants en todas ──────
+  // Corrección post-revisión iter3: el skip if variants se aplica
+  // también a las pasadas URL y combo, no solo a la SKU.
+
+  it('Jerarquía: URL NO deduplica si ambos productos tienen variants distintas', () => {
     const p1 = makeProduct({
       id: 'p1',
       name: 'Zapatillas',
-      sku: undefined,  // Sin SKU → no entra en pasada SKU.
+      sku: undefined,
       productUrl: 'https://shop.com/product/123',
       brand: 'Adidas',
       source: 'shopify',
@@ -375,20 +375,37 @@ describe('iter3 — dedup de variantes con SKU padre', () => {
 
     const result = dedupProducts([p1, p2])
 
-    // Misma URL normalizada → pasada URL los deduplica.
+    expect(result.deduped).toHaveLength(2)
+    expect(result.discardedCount).toBe(0)
+    expect(result.deduped[0].variants).toHaveLength(1)
+    expect(result.deduped[1].variants).toHaveLength(1)
+  })
+
+  it('Jerarquía: URL SÍ deduplica productos SIN variants (regresión)', () => {
+    const p1 = makeProduct({
+      id: 'p1',
+      name: 'Zapatillas',
+      sku: undefined,
+      productUrl: 'https://shop.com/product/123',
+      brand: 'Adidas',
+      source: 'shopify',
+    })
+    const p2 = makeProduct({
+      id: 'p2',
+      name: 'Zapatillas',
+      sku: undefined,
+      productUrl: 'https://shop.com/product/123',
+      brand: 'Adidas',
+      source: 'shopify',
+    })
+
+    const result = dedupProducts([p1, p2])
+
     expect(result.deduped).toHaveLength(1)
     expect(result.discardedCount).toBe(1)
   })
 
-  it('Jerarquía: combo deduplica normalmente aunque ambos tengan variants', () => {
-    // Sin SKU ni URL → pasada combo. Mismo name+brand+price → dedup normal.
-    // Pero esto es contradictorio: si ambos tienen variants, ¿no debería
-    // saltarse el dedup? No — el skip solo aplica a la pasada SKU.
-    // Documentamos que para variantes con combo match, se deduplican.
-    // Si esto no es lo deseado, requeriría añadir skipIfVariants también a
-    // la pasada combo — pero eso rompería la dedup normal de productos
-    // con variants reales duplicados (que el extractor encuentra en
-    // JSON-LD + DOM walk).
+  it('Jerarquía: combo NO deduplica si ambos productos tienen variants distintas', () => {
     const p1 = makeProduct({
       id: 'p1',
       name: 'Zapatillas Runner',
@@ -408,11 +425,196 @@ describe('iter3 — dedup de variantes con SKU padre', () => {
 
     const result = dedupProducts([p1, p2])
 
-    // Documentamos el comportamiento: combo match deduplica incluso con
-    // variants. Esto puede revisarse en iter4 si se considera que
-    // debería saltarse.
+    expect(result.deduped).toHaveLength(2)
+    expect(result.discardedCount).toBe(0)
+    expect(result.deduped[0].variants).toHaveLength(1)
+    expect(result.deduped[1].variants).toHaveLength(1)
+  })
+
+  it('Jerarquía: combo SÍ deduplica productos SIN variants (regresión)', () => {
+    const p1 = makeProduct({
+      id: 'p1',
+      name: 'Zapatillas Runner',
+      brand: 'Adidas',
+      price: '99.99',
+      source: 'shopify',
+    })
+    const p2 = makeProduct({
+      id: 'p2',
+      name: 'Zapatillas Runner',
+      brand: 'Adidas',
+      price: '99.99',
+      source: 'shopify',
+    })
+
+    const result = dedupProducts([p1, p2])
+
     expect(result.deduped).toHaveLength(1)
     expect(result.discardedCount).toBe(1)
+  })
+
+  it('Jerarquía: URL con variants en orden inverso → 2 productos (simétrico)', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Zapatillas',
+      productUrl: 'https://shop.com/p/123',
+      brand: 'Adidas', source: 'shopify',
+      variants: [makeVariant({ id: 'v1', name: '42' })],
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Zapatillas',
+      productUrl: 'https://shop.com/p/123',
+      brand: 'Adidas', source: 'shopify',
+      variants: [makeVariant({ id: 'v2', name: '43' })],
+    })
+
+    const r1 = dedupProducts([p1, p2])
+    const r2 = dedupProducts([p2, p1])
+
+    expect(r1.deduped).toHaveLength(2)
+    expect(r2.deduped).toHaveLength(2)
+  })
+
+  it('Jerarquía: combo con variants en orden inverso → 2 productos (simétrico)', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Camiseta', brand: 'Nike', price: '19.99', source: 'shopify',
+      variants: [makeVariant({ id: 'v1', name: 'S' })],
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Camiseta', brand: 'Nike', price: '19.99', source: 'shopify',
+      variants: [makeVariant({ id: 'v2', name: 'M' })],
+    })
+
+    const r1 = dedupProducts([p1, p2])
+    const r2 = dedupProducts([p2, p1])
+
+    expect(r1.deduped).toHaveLength(2)
+    expect(r2.deduped).toHaveLength(2)
+  })
+
+  it('Jerarquía: URL — p1 con variants + p2 sin variants → 2 productos (no se pierden datos)', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Zapatillas',
+      productUrl: 'https://shop.com/p/123',
+      brand: 'Adidas', source: 'shopify',
+      variants: [makeVariant({ id: 'v1', name: '42' })],
+      extras: { color: 'Negro' },
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Zapatillas',
+      productUrl: 'https://shop.com/p/123',
+      brand: 'Adidas', source: 'shopify',
+      extras: { reviews: '100' },
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(2)
+    expect(result.discardedCount).toBe(0)
+    expect(result.deduped[0].variants).toHaveLength(1)
+    expect(result.deduped[0].extras).toEqual({ color: 'Negro' })
+    expect(result.deduped[1].variants).toBeUndefined()
+    expect(result.deduped[1].extras).toEqual({ reviews: '100' })
+  })
+
+  it('Jerarquía: combo — p1 con variants + p2 sin variants → 2 productos', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Camiseta', brand: 'Nike', price: '19.99', source: 'shopify',
+      variants: [makeVariant({ id: 'v1', name: 'S' })],
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Camiseta', brand: 'Nike', price: '19.99', source: 'shopify',
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(2)
+    expect(result.discardedCount).toBe(0)
+    expect(result.deduped[0].variants).toHaveLength(1)
+    expect(result.deduped[1].variants).toBeUndefined()
+  })
+
+  it('Productos con variants: [] (vacío) — dedup URL normal', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Mouse',
+      productUrl: 'https://amazon.com/dp/B123',
+      brand: 'Logitech', source: 'amazon',
+      variants: [],
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Mouse',
+      productUrl: 'https://amazon.com/dp/B123',
+      brand: 'Logitech', source: 'amazon',
+      variants: [],
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(1)
+    expect(result.discardedCount).toBe(1)
+  })
+
+  it('Productos con variants: [] (vacío) — dedup combo normal', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Mouse', brand: 'Logitech', price: '29.99', source: 'amazon',
+      variants: [],
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Mouse', brand: 'Logitech', price: '29.99', source: 'amazon',
+      variants: [],
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(1)
+    expect(result.discardedCount).toBe(1)
+  })
+
+  it('Productos sin variants deduplicados por URL — regresión', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Mouse',
+      productUrl: 'https://amazon.com/dp/B123?utm_source=newsletter',
+      brand: 'Logitech', source: 'amazon',
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Mouse',
+      productUrl: 'https://amazon.com/dp/B123',
+      brand: 'Logitech', source: 'amazon',
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(1)
+    expect(result.discardedCount).toBe(1)
+  })
+
+  it('Productos sin variants deduplicados por combo — regresión', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'iPhone', brand: 'Apple', price: '999', source: 'amazon',
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'iPhone', brand: 'Apple', price: '999', source: 'amazon',
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(1)
+    expect(result.discardedCount).toBe(1)
+  })
+
+  it('Mismo SKU en fuentes distintas con variants — regresión source-aware', () => {
+    const p1 = makeProduct({
+      id: 'p1', name: 'Headphones', sku: 'HP-001', brand: 'Sony', source: 'amazon',
+      variants: [makeVariant({ id: 'v1', name: 'Black' })],
+    })
+    const p2 = makeProduct({
+      id: 'p2', name: 'Headphones', sku: 'HP-001', brand: 'Sony', source: 'hotmart',
+      variants: [makeVariant({ id: 'v2', name: 'White' })],
+    })
+
+    const result = dedupProducts([p1, p2])
+
+    expect(result.deduped).toHaveLength(2)
+    expect(result.discardedCount).toBe(0)
   })
 
   // ─── Caso 9: fixtures 09 y 10 siguen funcionando ─────────────────────────
