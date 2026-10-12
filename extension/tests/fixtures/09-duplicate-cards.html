@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Página con tarjetas duplicadas del mismo producto (mismo ASIN). El extractor debería deduplicar." />
+  <title>Resultados de búsqueda: Echo Dot | TecnoStore</title>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">TecnoStore</a>
+    <form class="search-form" action="/buscar" method="get">
+      <input type="text" name="q" value="echo dot" />
+      <button type="submit">Buscar</button>
+    </form>
+  </header>
+  <main class="search-results">
+    <h1>Resultados para "echo dot"</h1>
+    <p>4 resultados — pero varios representan el mismo ASIN</p>
+    <ul class="product-grid">
+      <!-- Tarjeta 1: Echo Dot 5ª gen negro -->
+      <li class="product-card" data-asin="B0B7N1FGK6" data-sku="AMZ-ED5-BLK">
+        <a href="/productos/echo-dot-5-negro">
+          <img src="https://cdn.tecnostore.example/img/echo-dot-5-black.jpg" alt="Echo Dot 5ª gen negro" />
+          <h3>Echo Dot (5ª gen, negro)</h3>
+          <span class="price">54,99 €</span>
+        </a>
+      </li>
+      <!-- Tarjeta 2: MISMO producto, variante editorial de bundle -->
+      <li class="product-card" data-asin="B0B7N1FGK6" data-sku="AMZ-ED5-BLK">
+        <a href="/productos/echo-dot-5-negro">
+          <img src="https://cdn.tecnostore.example/img/echo-dot-5-black.jpg" alt="Echo Dot 5ª gen negro" />
+          <h3>Echo Dot 5ª gen negro (con 6 meses de Music Unlimited)</h3>
+          <span class="price">59,99 €</span>
+        </a>
+      </li>
+      <!-- Tarjeta 3: MISMO producto anunciado como "segunda mano" -->
+      <li class="product-card" data-asin="B0B7N1FGK6" data-sku="AMZ-ED5-BLK-USED">
+        <a href="/productos/echo-dot-5-negro?cond=used">
+          <img src="https://cdn.tecnostore.example/img/echo-dot-5-black.jpg" alt="Echo Dot 5ª gen negro reacondicionado" />
+          <h3>Echo Dot 5ª gen negro (reacondicionado)</h3>
+          <span class="price">34,99 €</span>
+        </a>
+      </li>
+      <!-- Tarjeta 4: OTRO producto distinto -->
+      <li class="product-card" data-asin="B084J4QF2L" data-sku="AMZ-ED4-BLU">
+        <a href="/productos/echo-dot-4-azul">
+          <img src="https://cdn.tecnostore.example/img/echo-dot-4-blue.jpg" alt="Echo Dot 4ª gen azul" />
+          <h3>Echo Dot (4ª gen, azul)</h3>
+          <span class="price">39,99 €</span>
+        </a>
+      </li>
+    </ul>
+  </main>
+  <footer class="site-footer"><p>&copy; 2025 TecnoStore.</p></footer>
+</body>
+</html>

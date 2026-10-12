@@ -3,6 +3,9 @@
 // chrome.storage access) so it is safe to import from both the content-script
 // IIFE bundle and the service-worker module bundle without leaking listeners.
 
+import type { StructuredProduct } from '@/types'
+import { normalizeProductUrl } from './normalize'
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface JVZooProduct {
@@ -101,4 +104,46 @@ export function buildJVZooSuggestion(products: JVZooProduct[]): {
     reasoning:
       'Extractor especializado JVZoo: datos extraídos directamente de div.home-review-card (sin IA). 100% precisión; sin consumo de créditos en la fase de sugerencia.',
   }
+}
+
+// ─── Structured product mapper ──────────────────────────────────────────────
+
+/**
+ * Convierte `JVZooProduct[]` al tipo canónico `StructuredProduct[]`.
+ *
+ * Mapea los campos extraídos de las cards HTML de JVZoo a la estructura
+ * canónica que el service worker usa para bypasear el LLM en SCRAPE (vía
+ * `productsToRows`).
+ *
+ * Campos:
+ * - id: `detail_url` normalizada (sin tracking) → `title+vendor` fallback
+ * - name: title
+ * - price: price (ya viene como string sin símbolo, ej. "24.95")
+ * - currency: 'USD' (JVZoo siempre opera en USD)
+ * - imageUrl: image_url
+ * - productUrl: detail_url
+ * - brand: vendor
+ * - source: 'jvzoo'
+ * - extras: `{ units_sold: String(units_sold) }`
+ * - extractionStatus: 'complete'
+ */
+export function jvzooToStructured(products: JVZooProduct[]): StructuredProduct[] {
+  return products.map(p => {
+    const normalizedUrl = normalizeProductUrl(p.detail_url) || p.detail_url || ''
+    const id = normalizedUrl || `${p.title}|${p.vendor}`
+    return {
+      id,
+      name: p.title,
+      price: p.price || undefined,
+      currency: 'USD',
+      imageUrl: p.image_url || undefined,
+      productUrl: normalizedUrl || undefined,
+      brand: p.vendor || undefined,
+      source: 'jvzoo',
+      extras: {
+        ...(p.units_sold != null && { units_sold: String(p.units_sold) }),
+      },
+      extractionStatus: 'complete' as const,
+    }
+  })
 }

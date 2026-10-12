@@ -134,7 +134,7 @@ export interface ScrapeJob {
 
 export type BridgeMessage =
   | { type: 'EXTRACT_PAGE' }
-  | { type: 'PAGE_EXTRACTED'; payload: { url: string; title: string; pageText: string; detectedItems: number } }
+  | { type: 'PAGE_EXTRACTED'; payload: { url: string; title: string; pageText: string; detectedItems: number; structuredProducts?: StructuredProduct[]; diagnostics?: ExtractionDiagnostics } }
   | { type: 'SUGGEST_FIELDS'; payload: SuggestFieldsRequest }
   | { type: 'SUGGEST_FIELDS_RESULT'; payload: SuggestFieldsResponse }
   | { type: 'ESTIMATE_COST'; payload: { fieldCount: number; requestedRows: number } }
@@ -144,3 +144,98 @@ export type BridgeMessage =
   | { type: 'SCRAPE_RESULT'; payload: ScrapeResponse }
   | { type: 'TEMPLATE_MATCH'; payload: { template: Template } }
   | { type: 'ERROR'; payload: { message: string } }
+
+// ─── Structured product (canonical, cross-platform) ──────────────────────────
+
+/**
+ * Producto estructurado canónico que todos los extractores (genérico y
+ * especializados) deben producir. Compatible hacia atrás con `Record<string, string>`
+ * (el contrato del sidebar) vía el helper `productToRow()` de `@/lib/structured-product`.
+ */
+export interface StructuredProduct {
+  /** Identificador único dentro del set (preferentemente: GTIN, SKU, ASIN, URL normalizada). */
+  id: string
+  /** Nombre/título del producto. */
+  name: string
+  /** Precio actual como string crudo (ej. "29.99" o "1.299,99" — no convertir sin saber la moneda). */
+  price?: string
+  /** Moneda ISO 4217 (ej. USD, EUR, BRL, COP, MXN) si se pudo determinar. */
+  currency?: string
+  /** Precio anterior / de referencia (para mostrar descuentos). */
+  originalPrice?: string
+  /** URL absoluta de la imagen principal. */
+  imageUrl?: string
+  /** URL absoluta de la ficha del producto. */
+  productUrl?: string
+  /** Marca / vendedor / productor. */
+  brand?: string
+  /** SKU / ASIN / GTIN / referencia del productor. */
+  sku?: string
+  /** Disponibilidad: 'in stock' | 'out of stock' | 'preorder' | undefined. */
+  availability?: 'in stock' | 'out of stock' | 'preorder' | string
+  /** Variantes (tallas, colores, etc.) cuando estén disponibles. */
+  variants?: ProductVariant[]
+  /** Plataforma de origen: 'amazon' | 'dropi' | 'hotmart' | 'jvzoo' | 'muncheye' | 'generic'. */
+  source: string
+  /** Campos extra específicos de cada plataforma (ej. Dropi provider_price, Hotmart rating). */
+  extras?: Record<string, string>
+  /**
+   * Estado de la extracción para este producto en particular.
+   * - 'complete' = todos los campos clave presentes
+   * - 'partial' = algunos campos ausentes pero el producto es válido
+   * - 'inferred' = algunos valores fueron inferidos por heurística
+   */
+  extractionStatus: 'complete' | 'partial' | 'inferred'
+}
+
+export interface ProductVariant {
+  /** Identificador de la variante (SKU o combinación talla-color). */
+  id: string
+  /** Talla, color, configuración, etc. */
+  name: string
+  sku?: string
+  price?: string
+  availability?: string
+  imageUrl?: string
+}
+
+/**
+ * Resultado completo de un extractor (genérico o especializado). Compatible
+ * hacia atrás con el `ExtractedPage` actual — el sidebar puede ignorar
+ * `structuredProducts` y seguir usando `pageText` para el flujo IA.
+ */
+export interface ExtractionResult {
+  url: string
+  title: string
+  pageText: string
+  detectedItems: number
+  /**
+   * Productos estructurados opcional. Cuando está presente, el service worker
+   * puede bypasear el LLM en SCRAPE (shortcut) y mapear directamente a filas.
+   */
+  structuredProducts?: StructuredProduct[]
+  /**
+   * Diagnóstico del extractor: explica qué pasó durante la extracción.
+   * Distinge "0 resultados = no products" vs "0 resultados = estructura no reconocida".
+   */
+  diagnostics?: ExtractionDiagnostics
+}
+
+export interface ExtractionDiagnostics {
+  /** Cantidad de productos candidatos antes de normalización/dedup. */
+  rawCount: number
+  /** Cantidad de productos tras dedup. */
+  dedupedCount: number
+  /** Cantidad de productos descartados por validación. */
+  rejectedCount: number
+  /** Fuentes de datos que se intentaron (jsonld, microdata, dom, etc.). */
+  sourcesAttempted: string[]
+  /** Fuentes que produjeron datos. */
+  sourcesSucceeded: string[]
+  /** Errores no fatales (ej. "JSON-LD malformed", "image not loadable"). */
+  warnings: string[]
+  /** Error fatal si lo hubo. */
+  error?: string
+  /** Tiempo total de extracción en ms. */
+  elapsedMs?: number
+}

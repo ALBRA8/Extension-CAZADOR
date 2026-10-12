@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Producto con precio en formato regional ambiguo — dos variantes del mismo producto en una página, una con formato europeo (1.299,99) y otra con formato anglosajón (1,299.99)." />
+  <title>Cámara Mirrorless Lumira M50 | TecnoStore</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org/",
+    "@type": "Product",
+    "name": "Cámara Mirrorless Lumira M50 (body)",
+    "sku": "LMR-M50-BODY",
+    "offers": {
+      "@type": "Offer",
+      "priceCurrency": "EUR",
+      "price": "1299.99",
+      "availability": "https://schema.org/InStock"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">TecnoStore</a>
+    <nav class="main-nav">
+      <a href="/categoria/fotografia" class="active">Fotografía</a>
+    </nav>
+  </header>
+  <main class="product-detail">
+    <article class="product-card" data-sku="LMR-M50-BODY">
+      <h1 class="product-title">Cámara Mirrorless Lumira M50 (body)</h1>
+      <div class="product-media">
+        <img src="https://cdn.tecnostore.example/img/lumira-m50.jpg" alt="Lumira M50" />
+      </div>
+
+      <!-- PRECIO EN FORMATO EUROPEO (es-ES): 1.299,99 € -->
+      <!-- El punto separa miles, la coma separa decimales. Equivale a mil doscientos noventa y nueve con noventa y nueve. -->
+      <div class="product-price price-eu" lang="es">
+        <span class="price-amount">1.299,99</span>
+        <span class="price-currency">€</span>
+      </div>
+
+      <!-- PRECIO EN FORMATO ANGLOSAJÓN (en-US): 1,299.99 USD -->
+      <!-- La coma separa miles, el punto separa decimales. Mismo valor numérico. -->
+      <div class="product-price price-us" lang="en">
+        <span class="price-amount">1,299.99</span>
+        <span class="price-currency">US$</span>
+      </div>
+
+      <!-- TERCERA TARJETA: PRECIO SIN SEPARADOR DE MILES — formato compacto -->
+      <!-- Ambiguo: ¿es 1299.99 o 12999? Contexto debe resolverlo (producto premium). -->
+      <div class="product-price price-compact">
+        <span class="price-amount">1299.99</span>
+        <span class="price-currency">€</span>
+      </div>
+
+      <p class="product-description">
+        Sensor APS-C de 24MP, vídeo 4K hasta 60p y estabilización en cuerpo de 5 ejes.
+        Precio sujeto a tu región; el valor numérico es idéntico en los tres formatos mostrados.
+      </p>
+      <a class="btn-add-cart" href="/cart/add?sku=LMR-M50-BODY">Añadir al carrito</a>
+    </article>
+    <aside class="region-picker">
+      <h2>Elige tu región</h2>
+      <p>El precio se mostrará en el formato local correspondiente.</p>
+      <ul>
+        <li>España (es-ES): 1.299,99 €</li>
+        <li>Estados Unidos (en-US): US$ 1,299.99</li>
+        <li>Alemania (de-DE): 1.299,99 €</li>
+      </ul>
+    </aside>
+  </main>
+  <footer class="site-footer"><p>&copy; 2025 TecnoStore.</p></footer>
+</body>
+</html>

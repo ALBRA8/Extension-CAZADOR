@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Móviles plegables con imágenes responsive mediante srcset y picture." />
+  <title>Móviles plegables | TecnoStore</title>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">TecnoStore</a>
+    <nav class="main-nav">
+      <a href="/categoria/moviles" class="active">Móviles</a>
+    </nav>
+  </header>
+  <main class="category-page">
+    <h1>Móviles plegables</h1>
+    <p>2 productos encontrados</p>
+    <ul class="product-grid">
+      <li class="product-card" data-sku="SMG-ZF5-256">
+        <a href="/productos/galaxy-z-fold5">
+          <picture>
+            <source media="(min-width: 1200px)" srcset="https://cdn.tecnostore.example/img/zfold5-large.jpg" />
+            <source media="(min-width: 600px)" srcset="https://cdn.tecnostore.example/img/zfold5-medium.jpg" />
+            <img
+              src="https://cdn.tecnostore.example/img/zfold5-small.jpg"
+              srcset="https://cdn.tecnostore.example/img/zfold5-small.jpg 320w, https://cdn.tecnostore.example/img/zfold5-medium.jpg 640w, https://cdn.tecnostore.example/img/zfold5-large.jpg 1024w"
+              sizes="(max-width: 600px) 320px, (max-width: 1200px) 640px, 1024px"
+              alt="Samsung Galaxy Z Fold5 256GB"
+              width="320"
+              height="320"
+            />
+          </picture>
+          <h3>Samsung Galaxy Z Fold5 (256GB)</h3>
+          <span class="price">1.799,00 €</span>
+        </a>
+      </li>
+      <li class="product-card" data-sku="SMG-ZF5-512">
+        <a href="/productos/galaxy-z-fold5-512">
+          <picture>
+            <source media="(min-width: 1200px)" srcset="https://cdn.tecnostore.example/img/zfold5-large.jpg" />
+            <source media="(min-width: 600px)" srcset="https://cdn.tecnostore.example/img/zfold5-medium.jpg" />
+            <img
+              src="https://cdn.tecnostore.example/img/zfold5-small.jpg"
+              srcset="https://cdn.tecnostore.example/img/zfold5-small.jpg 320w, https://cdn.tecnostore.example/img/zfold5-medium.jpg 640w"
+              sizes="(max-width: 600px) 320px, 640px"
+              alt="Samsung Galaxy Z Fold5 512GB"
+              width="320"
+              height="320"
+            />
+          </picture>
+          <h3>Samsung Galaxy Z Fold5 (512GB)</h3>
+          <span class="price">1.999,00 €</span>
+        </a>
+      </li>
+    </ul>
+  </main>
+  <footer class="site-footer"><p>&copy; 2025 TecnoStore.</p></footer>
+</body>
+</html>

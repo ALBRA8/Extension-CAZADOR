@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Catálogo de sillas gaming con lazy loading de imágenes." />
+  <title>Sillas gaming | TecnoStore</title>
+  <style>
+    .lazyload { opacity: 0; transition: opacity 0.3s; }
+    .lazyload.loaded { opacity: 1; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">TecnoStore</a>
+    <nav class="main-nav">
+      <a href="/categoria/muebles">Muebles</a>
+      <a href="/categoria/sillas" class="active">Sillas</a>
+    </nav>
+  </header>
+  <main class="category-page">
+    <h1>Sillas gaming</h1>
+    <p>4 productos encontrados</p>
+    <ul class="product-grid">
+      <li class="product-card" data-sku="SIL-DXR-DR3-BLK">
+        <a href="/productos/dxracer-dr3">
+          <img
+            class="lazyload"
+            data-src="https://cdn.tecnostore.example/img/dxracer-dr3.jpg"
+            data-srcset="https://cdn.tecnostore.example/img/dxracer-dr3.jpg 1x, https://cdn.tecnostore.example/img/dxracer-dr3@2x.jpg 2x"
+            alt="DXRacer Drifting Series DR3 negra"
+            width="400"
+            height="400"
+          />
+          <h3>DXRacer Drifting Series DR3</h3>
+          <span class="price">329,00 €</span>
+        </a>
+      </li>
+      <li class="product-card" data-sku="SIL-SCT-PRM-RED">
+        <a href="/productos/secretlab-prime">
+          <img
+            class="lazyload"
+            data-src="https://cdn.tecnostore.example/img/secretlab-prime.jpg"
+            alt="Secretlab Prime rojo"
+            width="400"
+            height="400"
+          />
+          <h3>Secretlab Prime (rojo)</h3>
+          <span class="price">449,00 €</span>
+        </a>
+      </li>
+      <li class="product-card" data-sku="SIL-NBL-G7-GRY">
+        <a href="/productos/noblechick-g7">
+          <img
+            class="lazyload"
+            data-src="https://cdn.tecnostore.example/img/noblechick-g7.jpg"
+            alt="Noblechairs Icon G7 gris"
+            width="400"
+            height="400"
+          />
+          <h3>Noblechairs Icon G7</h3>
+          <span class="price">389,90 €</span>
+        </a>
+      </li>
+      <li class="product-card" data-sku="SIL-HOM-CMP-BLU">
+        <a href="/productos/homall-competitor">
+          <img
+            class="lazyload"
+            data-src="https://cdn.tecnostore.example/img/homall-competitor.jpg"
+            alt="Homall Competitor azul"
+            width="400"
+            height="400"
+          />
+          <h3>Homall Competitor (azul)</h3>
+          <span class="price">149,99 €</span>
+        </a>
+      </li>
+    </ul>
+  </main>
+  <footer class="site-footer"><p>&copy; 2025 TecnoStore.</p></footer>
+  <script>
+    // Demo de lazy loading nativo simulado (no se ejecuta en el test,
+    // pero deja constancia de que las imágenes se cargan vía data-src).
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('img.lazyload').forEach((img) => {
+        const ds = img.getAttribute('data-src')
+        if (ds) img.setAttribute('src', ds)
+        img.classList.add('loaded')
+      })
+    })
+  </script>
+</body>
+</html>

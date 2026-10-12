@@ -55,6 +55,17 @@ interface HotmartProduct {
   pay_url: string
 }
 
+interface ExtractionDiagnostics {
+  rawCount: number
+  dedupedCount: number
+  rejectedCount: number
+  sourcesAttempted: string[]
+  sourcesSucceeded: string[]
+  warnings: string[]
+  error?: string
+  elapsedMs?: number
+}
+
 interface HotmartExtractResult {
   url: string
   title: string
@@ -63,6 +74,10 @@ interface HotmartExtractResult {
   detectedItems: number
   /** Structured product array; also exposed on `window.__HOTMART_PRODUCTS__`. */
   hotmartProducts: HotmartProduct[]
+  /**
+   * Diagnóstico del extractor (añadido en WAVE 3 — campo opcional, retrocompatible).
+   */
+  diagnostics?: ExtractionDiagnostics
 }
 
 // ─── URL / locale detection ─────────────────────────────────────────────────
@@ -84,6 +99,42 @@ const HOTMART_MARKETPLACE_BARE_RE =
 function isHotmartMarketplaceUrl(url: string): boolean {
   if (!url) return false
   return HOTMART_MARKETPLACE_RE.test(url) || HOTMART_MARKETPLACE_BARE_RE.test(url)
+}
+
+// ─── Inline image validation (duplicated from lib/normalize.ts) ───────────
+// Content scripts cannot import ES modules at runtime; the small subset
+// needed here is duplicated inline. Keep in sync with the canonical copy.
+
+const PLACEHOLDER_PATTERNS: RegExp[] = [
+  /^data:image\/svg\+xml/i,
+  /^data:image\/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==/i,
+  /^data:image\/gif;base64,R0lGODlhAQABAIAAAAAAAP\/\/\/yH5BAEAAAAALAAAAAABAAEAAAIBRAA7/i,
+  /^data:image\/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M\/?AAAAA0RRK0tqAAAAASUVORK5CYII=/i,
+  /1x1\.gif/i,
+  /transparent\.gif/i,
+  /placeholder\.(gif|png|jpe?g|svg|webp)/i,
+  /no-image/i,
+  /no_image/i,
+  /noimage/i,
+  /default-(image|product)/i,
+  /product-placeholder/i,
+  /spacer\.gif/i,
+  /blank\.(gif|png)/i,
+]
+
+/**
+ * Conservadora: devuelve true si la URL parece un placeholder de imagen
+ * (data:image/svg+xml, transparent 1x1 gif, "no-image", etc.). Ante la duda
+ * devuelve false (prefiere dejar pasar la URL).
+ */
+function isPlaceholderImage(url: string): boolean {
+  if (!url || typeof url !== 'string') return true
+  const t = url.trim()
+  if (!t) return true
+  for (const re of PLACEHOLDER_PATTERNS) {
+    if (re.test(t)) return true
+  }
+  return false
 }
 
 // ─── Next.js __NEXT_DATA__ parsing ──────────────────────────────────────────
@@ -198,6 +249,21 @@ function normalizeProduct(p: any): HotmartProduct | null {
 
   const payUrl = ref ? `https://pay.hotmart.com/${ref}` : ''
 
+  // Validate ingressDate: must be ISO date (YYYY-MM-DD or YYYY-MM-DDT…).
+  // If not, leave empty instead of persisting the raw value (which could be
+  // a localized date string, a timestamp, etc.).
+  const rawIngressDate = pickString(p, 'ingressDate') || pickString(p, 'creationDate')
+  const ingressDate =
+    rawIngressDate && /^\d{4}-\d{2}-\d{2}(T|$)/.test(rawIngressDate)
+      ? rawIngressDate
+      : ''
+
+  // Validate image_url: discard placeholders (data:image/svg+xml, 1x1 gif,
+  // "no-image", etc.). Leave empty instead of persisting the placeholder.
+  const rawImageUrl = pickImage(p)
+  const imageUrl =
+    rawImageUrl && !isPlaceholderImage(rawImageUrl) ? rawImageUrl : ''
+
   return {
     title,
     slug,
@@ -209,11 +275,11 @@ function normalizeProduct(p: any): HotmartProduct | null {
     language: pickString(p, 'language') || pickString(p, 'defaultLanguage'),
     rating: pickNumber(p, 'rating'),
     totalReviews: pickNumber(p, 'totalReviews'),
-    ingressDate: pickString(p, 'ingressDate') || pickString(p, 'creationDate'),
+    ingressDate,
     owner_name: ownerName,
     owner_slug: ownerSlug,
     owner_publicId: ownerPublicId,
-    image_url: pickImage(p),
+    image_url: imageUrl,
     pay_url: payUrl,
   }
 }
@@ -253,11 +319,25 @@ function buildPageText(products: HotmartProduct[]): string {
 // ─── Main extract routine ───────────────────────────────────────────────────
 
 function extractHotmart(): HotmartExtractResult {
+  const startedAt =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now()
+  const warnings: string[] = []
   const nextData = readNextData()
   const rawProducts = nextData ? extractProductsArray(nextData) : []
+  const rawCount = rawProducts.length
   const hotmartProducts = rawProducts
     .map(normalizeProduct)
     .filter((p): p is HotmartProduct => p !== null)
+  // Items discarded by `!title && !ref` (noise from __NEXT_DATA__).
+  const rejectedCount = rawCount - hotmartProducts.length
+
+  if (nextData == null) {
+    warnings.push('__NEXT_DATA__ script not found or unparseable')
+  } else if (rawCount === 0) {
+    warnings.push('__NEXT_DATA__ parsed but no products found at known paths')
+  }
 
   // Expose on the page so the background (and other scripts) can pick it up.
   try {
@@ -266,12 +346,31 @@ function extractHotmart(): HotmartExtractResult {
     /* ignore — window may be restricted in some sandboxes */
   }
 
+  const endedAt =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now()
+  const elapsedMs = Math.max(0, Math.round(endedAt - startedAt))
+
+  // Hotmart currently does NOT dedup — dedupedCount === hotmartProducts.length.
+  // The field is reported for consistency with other extractors.
+  const diagnostics: ExtractionDiagnostics = {
+    rawCount,
+    dedupedCount: hotmartProducts.length,
+    rejectedCount,
+    sourcesAttempted: ['next-data'],
+    sourcesSucceeded: hotmartProducts.length > 0 ? ['next-data'] : [],
+    warnings,
+    elapsedMs,
+  }
+
   return {
     url: location.href,
     title: document.title,
     pageText: buildPageText(hotmartProducts),
     detectedItems: hotmartProducts.length,
     hotmartProducts,
+    diagnostics,
   }
 }
 

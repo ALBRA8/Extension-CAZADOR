@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Ofertas del día en accesorios de móvil, fundas y cargadores." />
+  <title>Ofertas del día | TecnoStore</title>
+  <script type="application/ld+json">
+  [
+    {
+      "@context": "https://schema.org/",
+      "@type": "Product",
+      "name": "Funda Silicona iPhone 15 Pro",
+      "sku": "FUN-IP15P-BLACK",
+      "image": "https://cdn.tecnostore.example/img/funda-ip15p.jpg",
+      "offers": {
+        "@type": "Offer",
+        "priceCurrency": "EUR",
+        "price": "12.90",
+        "availability": "https://schema.org/InStock"
+      }
+    },
+    {
+      "@context": "https://schema.org/",
+      "@type": "Product",
+      "name": "Cargador USB-C 65W GaN",
+      "sku": "CG-USBC-65W",
+      "image": "https://cdn.tecnostore.example/img/cargador-65w.jpg",
+      "offers": {
+        "@type": "Offer",
+        "priceCurrency": "EUR",
+        "price": "29.50",
+        "availability": "https://schema.org/InStock"
+      }
+    },
+    {
+      "@context": "https://schema.org/",
+      "@type": "Product",
+      "name": "Cable USB-C a Lightning 2m",
+      "sku": "CAB-USBC-LT-2M",
+      "image": "https://cdn.tecnostore.example/img/cable-2m.jpg",
+      "offers": {
+        "@type": "Offer",
+        "priceCurrency": "EUR",
+        "price": "19.95",
+        "availability": "https://schema.org/OutOfStock"
+      }
+    }
+  ]
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">TecnoStore</a>
+    <input type="search" placeholder="Buscar productos…" />
+  </header>
+  <main class="product-listing">
+    <h1>Ofertas del día</h1>
+    <p class="listing-meta">3 productos encontrados · ordenados por relevancia</p>
+    <ul class="product-grid">
+      <li class="product-card" data-sku="FUN-IP15P-BLACK">
+        <a href="/productos/funda-ip15p">
+          <img src="https://cdn.tecnostore.example/img/funda-ip15p.jpg" alt="Funda Silicona iPhone 15 Pro" />
+          <h3>Funda Silicona iPhone 15 Pro</h3>
+          <span class="price">12,90 €</span>
+        </a>
+      </li>
+      <li class="product-card" data-sku="CG-USBC-65W">
+        <a href="/productos/cargador-65w">
+          <img src="https://cdn.tecnostore.example/img/cargador-65w.jpg" alt="Cargador USB-C 65W GaN" />
+          <h3>Cargador USB-C 65W GaN</h3>
+          <span class="price">29,50 €</span>
+        </a>
+      </li>
+      <li class="product-card" data-sku="CAB-USBC-LT-2M">
+        <a href="/productos/cable-2m">
+          <img src="https://cdn.tecnostore.example/img/cable-2m.jpg" alt="Cable USB-C a Lightning 2m" />
+          <h3>Cable USB-C a Lightning 2m</h3>
+          <span class="price price--agotado">19,95 € (agotado)</span>
+        </a>
+      </li>
+    </ul>
+  </main>
+  <footer class="site-footer"><p>&copy; 2025 TecnoStore.</p></footer>
+</body>
+</html>

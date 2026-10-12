@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Página con tarjetas que NO son productos: anuncios patrocinados, menús de navegación y recomendaciones editoriales." />
+  <title>Inicio | TecnoStore</title>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">TecnoStore</a>
+    <nav class="main-nav card-menu">
+      <a href="/categoria/audio" class="nav-card">Audio</a>
+      <a href="/categoria/moviles" class="nav-card">Móviles</a>
+      <a href="/categoria/computacion" class="nav-card">Computación</a>
+      <a href="/categoria/gaming" class="nav-card">Gaming</a>
+    </nav>
+  </header>
+  <main class="home-page">
+    <section class="hero-banner">
+      <h1>Black Friday — Hasta -40% en tecnología</h1>
+      <a href="/ofertas/black-friday" class="hero-cta">Ver ofertas</a>
+    </section>
+
+    <!-- Bloque patrocinado: anuncio publicitario, NO es un producto -->
+    <section class="sponsored-card card">
+      <span class="sponsored-badge">Patrocinado</span>
+      <h2>Ahorra en tu factura de luz con EnergíaVerde</h2>
+      <p>Cambia a energía 100% renovable y reduce tu factura hasta un 30%.</p>
+      <a href="https://energiaverde.example/?ref=tecnostore" class="card-cta" rel="sponsored nofollow">Saber más</a>
+    </section>
+
+    <!-- Bloque editorial: recomendaciones del equipo, también NO productos -->
+    <section class="editorial-card card">
+      <h2>Nuestro equipo recomienda</h2>
+      <p>Cinco gadgets que probamos en 2025 y nos encantaron. Lee el artículo completo para conocer nuestras opiniones honestas.</p>
+      <a href="/blog/5-gadgets-2025" class="card-cta">Leer artículo</a>
+    </section>
+
+    <!-- Newsletter form (no es producto) -->
+    <section class="newsletter-card card">
+      <h2>Suscríbete a nuestro boletín</h2>
+      <form action="/api/newsletter/subscribe" method="post">
+        <label for="email">Email</label>
+        <input id="email" type="email" name="email" placeholder="tucorreo@ejemplo.com" />
+        <button type="submit">Suscribirme</button>
+      </form>
+    </section>
+
+    <!-- Tarjetas de "servicios", NO productos físicos -->
+    <section class="services-grid">
+      <article class="service-card card">
+        <h2>Instalación de TV</h2>
+        <p>Técnico certificado en 24h.</p>
+        <span class="price-from">desde 49,00 €</span>
+      </article>
+      <article class="service-card card">
+        <h2>Garantía extendida 3 años</h2>
+        <p>Cobertura total para tus dispositivos.</p>
+        <span class="price-from">desde 29,00 €</span>
+      </article>
+    </section>
+  </main>
+  <footer class="site-footer">
+    <nav class="footer-nav">
+      <a href="/legal">Legal</a>
+      <a href="/contacto">Contacto</a>
+    </nav>
+  </footer>
+</body>
+</html>

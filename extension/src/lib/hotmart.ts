@@ -4,6 +4,8 @@
 // from both the content-script IIFE bundle and the service-worker module
 // bundle without leaking listeners across contexts.
 
+import type { StructuredProduct } from '@/types'
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface HotmartOwner {
@@ -135,4 +137,53 @@ export function buildHotmartSuggestion(products: HotmartProduct[]): {
     reasoning:
       'Extractor especializado Hotmart: datos extraídos directamente de __NEXT_DATA__ (sin IA). 100% precisión; precio real no incluido — usar fetchHotmartPrice(ref) o pay.hotmart.com/{ref} para obtenerlo.',
   }
+}
+
+// ─── Structured product mapper ──────────────────────────────────────────────
+
+/**
+ * Convierte `HotmartProduct[]` al tipo canónico `StructuredProduct[]`.
+ *
+ * Mapea los campos del payload Hotmart (extraído de `__NEXT_DATA__`) a la
+ * estructura canónica que el service worker usa para bypasear el LLM en
+ * SCRAPE (vía `productsToRows`).
+ *
+ * Campos:
+ * - id: `ref` (producerReferenceCode) → `slug` → `title` (preferencia)
+ * - sku: `ref`
+ * - productUrl: `pay_url` (pay.hotmart.com/{ref})
+ * - imageUrl: `image_url`
+ * - brand: `owner_name`
+ * - source: 'hotmart'
+ * - extras: slug, description, category, language, rating, totalReviews,
+ *   ingressDate, owner_slug, owner_publicId
+ * - extractionStatus: 'complete'
+ *
+ * El precio NO está incluido — Hotmart no lo expone en la página de
+ * marketplace. Se recupera por separado con `fetchHotmartPrice(ref)` y se
+ * inyecta en el StructuredProduct en el service worker antes de llamar a
+ * `productsToRows`.
+ */
+export function hotmartToStructured(products: HotmartProduct[]): StructuredProduct[] {
+  return products.map(p => ({
+    id: p.ref || p.slug || p.title,
+    name: p.title,
+    sku: p.ref || undefined,
+    productUrl: p.pay_url || undefined,
+    imageUrl: p.image_url || undefined,
+    brand: p.owner_name || undefined,
+    source: 'hotmart',
+    extras: {
+      ...(p.slug && { slug: p.slug }),
+      ...(p.description && { description: p.description }),
+      ...(p.category && { category: p.category }),
+      ...(p.language && { language: p.language }),
+      ...(p.rating != null && { rating: String(p.rating) }),
+      ...(p.totalReviews != null && { totalReviews: String(p.totalReviews) }),
+      ...(p.ingressDate && { ingressDate: p.ingressDate }),
+      ...(p.owner_slug && { owner_slug: p.owner_slug }),
+      ...(p.owner_publicId && { owner_publicId: p.owner_publicId }),
+    },
+    extractionStatus: 'complete' as const,
+  }))
 }

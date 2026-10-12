@@ -25,18 +25,24 @@
 import {
   isHotmartMarketplaceUrl,
   buildHotmartSuggestion,
+  hotmartToStructured,
   type HotmartProduct,
 } from '@/lib/hotmart'
 import {
   isJVZooUrl,
   buildJVZooSuggestion,
+  jvzooToStructured,
   type JVZooProduct,
 } from '@/lib/jvzoo'
 import {
   isMuncheyeUrl,
   buildMuncheyeSuggestion,
+  muncheyeToStructured,
   type MuncheyeLaunch,
 } from '@/lib/muncheye'
+import { productsToRows, buildExtractorConfidence } from '@/lib/structured-product'
+import { parsePrice } from '@/lib/normalize'
+import type { StructuredProduct, ExtractionDiagnostics } from '@/types'
 
 const BACKEND_URL = 'http://localhost:8787'
 
@@ -66,6 +72,11 @@ const DROPI_TAB_URL_RE =
 let lastHotmartExtract: { url: string; products: HotmartProduct[] } | null = null
 let lastJVZooExtract: { url: string; products: JVZooProduct[] } | null = null
 let lastMuncheyeExtract: { url: string; launches: MuncheyeLaunch[] } | null = null
+// Cache for the generic extractor's structured output (when WAVE 1
+// extractor.ts starts returning `structuredProducts` in its EXTRACT_PAGE
+// response). Used as a 4th priority source for the SCRAPE shortcut — after
+// the specialized Hotmart/JVZoo/Muncheye caches.
+let lastStructuredExtract: { url: string; products: StructuredProduct[] } | null = null
 
 // ─── Side panel lifecycle ────────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(() => {
@@ -179,6 +190,8 @@ async function extractActiveTab(): Promise<{
   title: string
   pageText: string
   detectedItems: number
+  structuredProducts?: StructuredProduct[]
+  diagnostics?: ExtractionDiagnostics
 }> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id || !tab.url) throw new Error('No hay pestaña activa válida.')
@@ -197,6 +210,17 @@ async function extractActiveTab(): Promise<{
   lastHotmartExtract = null
   lastJVZooExtract = null
   lastMuncheyeExtract = null
+  lastStructuredExtract = null
+
+  // If the WAVE 1 generic extractor returns structuredProducts, cache them
+  // for the SCRAPE shortcut (lowest priority — specialized caches take
+  // precedence per URL match).
+  if (data && Array.isArray(data.structuredProducts) && data.structuredProducts.length > 0) {
+    lastStructuredExtract = {
+      url: data.url || tab.url,
+      products: data.structuredProducts as StructuredProduct[],
+    }
+  }
 
   // Specialized Hotmart path: if the active URL is a Hotmart marketplace
   // page, also inject the hotmart extractor and combine the results. The
@@ -373,6 +397,56 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case 'SCRAPE': {
           const req = msg.payload
+
+          // ─── Shortcut: structured products bypass the LLM ────────────────
+          // If we already have canonical `StructuredProduct[]` for this URL
+          // (from a specialized extractor — Hotmart/JVZoo/Muncheye — or
+          // from the WAVE 1 generic extractor's `structuredProducts`
+          // field), map them directly to rows via `productsToRows`. This
+          // skips the AI backend entirely (creditsCost = 0) and is the
+          // zero-credit fast path for specialized marketplaces.
+          let structured = pickStructuredProducts(req.url)
+          if (structured && structured.length > 0) {
+            const started = Date.now()
+
+            // Hotmart price enrichment: when the active URL is a Hotmart
+            // marketplace page, the specialized extractor only returns
+            // catalog metadata (no price — Hotmart hides prices on
+            // pay.hotmart.com/{ref}). Fetch real prices for the first 10
+            // products in parallel and merge them into the structured
+            // products before mapping to rows.
+            if (isHotmartMarketplaceUrl(req.url)) {
+              structured = await enrichHotmartPrices(structured, req.url)
+            }
+
+            const rows = productsToRows(structured, req.fields)
+            const confidence = buildExtractorConfidence(req.fields, structured)
+            const result = {
+              rows,
+              rowCount: rows.length,
+              confidence,
+              creditsCost: 0,
+              elapsedMs: Date.now() - started,
+            }
+            await postToSidebar({ type: 'SCRAPE_RESULT', payload: result })
+            // Persist to history (creditsCost = 0 — no AI consumed).
+            await persistJob({
+              id: crypto.randomUUID(),
+              url: req.url,
+              title: req.title,
+              fields: req.fields,
+              rows: result.rows,
+              creditsCost: 0,
+              createdAt: Date.now(),
+              finishedAt: Date.now() + result.elapsedMs,
+            })
+            sendResponse({ ok: true })
+            break
+          }
+
+          // ─── Path IA (igual que antes) ──────────────────────────────────
+          // No structured products available — fall through to the AI
+          // backend as before.
           await postToSidebar({
             type: 'SCRAPE_PROGRESS',
             payload: { phase: 'Enviando página al modelo IA…', progress: 0.1 },
@@ -437,6 +511,172 @@ async function persistJob(job: any): Promise<void> {
   history.unshift(job)
   // Cap to 50 jobs to avoid bloat.
   await chrome.storage.local.set({ history: history.slice(0, 50) })
+}
+
+// ─── SCRAPE shortcut helpers ─────────────────────────────────────────────────
+// When the sidebar asks for SCRAPE on a URL for which we already have a
+// specialized extraction cached (Hotmart / JVZoo / Muncheye), or a generic
+// extractor that returned `structuredProducts`, we bypass the LLM and map the
+// canonical `StructuredProduct[]` directly to `Record<string, string>[]` via
+// `productsToRows`. The result is zero-credit, deterministic, and faster
+// than the AI path.
+
+/**
+ * Returns the `StructuredProduct[]` cached for `url`, or `null` if no
+ * specialized extraction is available.
+ *
+ * Priority (first match wins):
+ * 1. `lastHotmartExtract`   (Hotmart marketplace — `__NEXT_DATA__`)
+ * 2. `lastJVZooExtract`     (jvzoomarket.com — `div.home-review-card`)
+ * 3. `lastMuncheyeExtract`  (muncheye.com — schema.org/Product metadata)
+ * 4. `lastStructuredExtract` (generic WAVE 1 extractor's structuredProducts)
+ *
+ * The specialized caches store the raw platform-specific shapes; we convert
+ * them to canonical `StructuredProduct[]` via the `*ToStructured` mappers
+ * (one mapping per source). The generic cache already stores canonical
+ * `StructuredProduct[]`, so it's returned as-is.
+ */
+function pickStructuredProducts(url: string): StructuredProduct[] | null {
+  if (!url) return null
+  if (
+    lastHotmartExtract &&
+    lastHotmartExtract.url === url &&
+    lastHotmartExtract.products.length > 0
+  ) {
+    return hotmartToStructured(lastHotmartExtract.products)
+  }
+  if (
+    lastJVZooExtract &&
+    lastJVZooExtract.url === url &&
+    lastJVZooExtract.products.length > 0
+  ) {
+    return jvzooToStructured(lastJVZooExtract.products)
+  }
+  if (
+    lastMuncheyeExtract &&
+    lastMuncheyeExtract.url === url &&
+    lastMuncheyeExtract.launches.length > 0
+  ) {
+    return muncheyeToStructured(lastMuncheyeExtract.launches)
+  }
+  if (
+    lastStructuredExtract &&
+    lastStructuredExtract.url === url &&
+    lastStructuredExtract.products.length > 0
+  ) {
+    return lastStructuredExtract.products
+  }
+  return null
+}
+
+/**
+ * Enriches the structured products with real prices fetched from
+ * `pay.hotmart.com/{ref}` for the active Hotmart marketplace URL.
+ *
+ * The Hotmart specialized extractor only returns catalog metadata (title,
+ * slug, ref, image, owner, rating, etc.) — Hotmart hides the actual price
+ * on the pay page. To produce useful rows, we ask the hotmart-extractor
+ * content script to fetch up to 10 prices in parallel (rate-limit amable:
+ * max 10 concurrent fetches to pay.hotmart.com) and merge them into the
+ * structured products before `productsToRows` runs.
+ *
+ * Behavior:
+ * - Iterates `lastHotmartExtract.products` to find the refs to fetch (the
+ *   canonical products have `sku = ref` after `hotmartToStructured`).
+ * - Sends `{ type: 'FETCH_HOTMART_PRICE', ref }` to the hotmart-extractor
+ *   content script on the active tab (must be the Hotmart marketplace page
+ *   where the extractor was injected during EXTRACT_PAGE).
+ * - Parses each returned price string via `parsePrice` to extract the
+ *   amount and the currency (e.g. `US$230.00` → `{ amount: "230.00",
+ *   currency: "USD" }`).
+ * - Merges `price` and `currency` into the matching `StructuredProduct`
+ *   (keyed by `sku = ref`).
+ * - Returns the products unchanged on any error (a failed price fetch
+ *   never fails the SCRAPE — the product just stays without a price).
+ *
+ * If the active tab is not on Hotmart or the content script is not
+ * reachable, returns the products unchanged.
+ *
+ * @param products  The canonical structured products to enrich (already
+ *                  mapped from `HotmartProduct[]` via `hotmartToStructured`).
+ * @param url       The active Hotmart marketplace URL (must match
+ *                  `lastHotmartExtract.url`).
+ */
+async function enrichHotmartPrices(
+  products: StructuredProduct[],
+  url: string,
+): Promise<StructuredProduct[]> {
+  // Only enrich if we have Hotmart cached products for this URL.
+  if (!lastHotmartExtract || lastHotmartExtract.url !== url) return products
+
+  // Find the active tab where the hotmart-extractor content script lives.
+  // It was injected during EXTRACT_PAGE on the same Hotmart marketplace URL.
+  let tabId: number | undefined
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (tab?.id && tab.url && isHotmartMarketplaceUrl(tab.url)) {
+      tabId = tab.id
+    }
+  } catch {
+    // tabs.query failure — return products unchanged (no enrichment).
+    return products
+  }
+  if (tabId == null) return products
+
+  // Collect refs from the original HotmartProduct[] (limited to 10 for
+  // rate-limit friendliness — pay.hotmart.com throttles aggressive callers).
+  const refsToFetch = lastHotmartExtract.products
+    .filter((p) => p.ref)
+    .slice(0, 10)
+    .map((p) => p.ref)
+
+  if (refsToFetch.length === 0) return products
+
+  // Send FETCH_HOTMART_PRICE messages in parallel (max 10).
+  // Each response is a price string like "US$230.00" or "R$ 89,90"; we
+  // parse it via parsePrice to extract the amount + currency.
+  const fetchResults = await Promise.all(
+    refsToFetch.map(async (ref) => {
+      try {
+        const res = await chrome.tabs.sendMessage(tabId!, {
+          type: 'FETCH_HOTMART_PRICE',
+          ref,
+        })
+        if (res?.ok && typeof res.price === 'string' && res.price) {
+          const parsed = parsePrice(res.price)
+          if (parsed.amount) {
+            return { ref, amount: parsed.amount, currency: parsed.currency }
+          }
+        }
+        return null
+      } catch {
+        // Content script not reachable or fetch failed — skip this ref.
+        return null
+      }
+    }),
+  )
+
+  // Build ref -> { amount, currency? } map for fast lookup during merge.
+  const priceByRef = new Map<string, { amount: string; currency?: string }>()
+  for (const r of fetchResults) {
+    if (r) priceByRef.set(r.ref, { amount: r.amount, currency: r.currency })
+  }
+
+  if (priceByRef.size === 0) return products
+
+  // Merge prices into the structured products (keyed by `sku = ref`).
+  // Products without a fetched price are left untouched.
+  return products.map((p) => {
+    const ref = p.sku
+    if (!ref) return p
+    const priceInfo = priceByRef.get(ref)
+    if (!priceInfo) return p
+    return {
+      ...p,
+      price: priceInfo.amount,
+      currency: priceInfo.currency,
+    }
+  })
 }
 
 // ─── Dropi bridge ────────────────────────────────────────────────────────────

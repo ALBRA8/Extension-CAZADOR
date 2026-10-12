@@ -3,6 +3,9 @@
 // chrome.storage access) so it is safe to import from both the content-script
 // IIFE bundle and the service-worker module bundle without leaking listeners.
 
+import type { StructuredProduct } from '@/types'
+import { normalizeProductUrl } from './normalize'
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface MuncheyeLaunch {
@@ -101,4 +104,43 @@ export function buildMuncheyeSuggestion(launches: MuncheyeLaunch[]): {
     reasoning:
       'Extractor especializado Muncheye: datos extraídos de div.item.clearfix con schema.org/Product metadata (sin IA). 100% precisión; sin consumo de créditos en la fase de sugerencia.',
   }
+}
+
+// ─── Structured product mapper ──────────────────────────────────────────────
+
+/**
+ * Convierte `MuncheyeLaunch[]` al tipo canónico `StructuredProduct[]`.
+ *
+ * Mapea los launches extraídos del calendario de Muncheye (schema.org/Product
+ * metadata) a la estructura canónica que el service worker usa para bypasear
+ * el LLM en SCRAPE (vía `productsToRows`).
+ *
+ * Campos:
+ * - id: `jv_url` normalizada → `title+vendor` fallback
+ * - name: title
+ * - price: price (string crudo, ej. "37.00")
+ * - productUrl: jv_url
+ * - brand: vendor
+ * - source: 'muncheye'
+ * - extras: `{ launch_date, commission }`
+ * - extractionStatus: 'complete'
+ */
+export function muncheyeToStructured(launches: MuncheyeLaunch[]): StructuredProduct[] {
+  return launches.map(l => {
+    const normalizedUrl = normalizeProductUrl(l.jv_url) || l.jv_url || ''
+    const id = normalizedUrl || `${l.title}|${l.vendor}`
+    return {
+      id,
+      name: l.title,
+      price: l.price || undefined,
+      productUrl: normalizedUrl || undefined,
+      brand: l.vendor || undefined,
+      source: 'muncheye',
+      extras: {
+        ...(l.launch_date && { launch_date: l.launch_date }),
+        ...(l.commission && { commission: l.commission }),
+      },
+      extractionStatus: 'complete' as const,
+    }
+  })
 }

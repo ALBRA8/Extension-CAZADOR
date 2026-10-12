@@ -52,6 +52,92 @@ const K_DETAILS = 'dropi_product_details'
 // postMessage namespace (MAIN → ISOLATED bridge).
 const MSG_SOURCE = '__DROPI_INTERCEPTOR__'
 
+// CloudFront base for Dropi product images. `photo.urlS3` comes as a
+// relative path (e.g. "products/abc/image.jpg") and must be resolved
+// against this base to become a fetchable URL.
+const DROPI_CLOUDFRONT_BASE = 'https://d39ru7awumhhs2.cloudfront.net/'
+
+// ---- Inline normalization helpers (duplicated from lib/normalize.ts) --------
+// Content scripts cannot import ES modules at runtime; the small subset needed
+// here is duplicated inline. Keep in sync with the canonical copy.
+
+/**
+ * Resolves a possibly-relative URL against a base. Returns '' for invalid
+ * inputs. Tolerates null/undefined/empty → always returns ''.
+ */
+function resolveUrl(maybeRelative: string, baseUrl: string): string {
+  if (!maybeRelative || typeof maybeRelative !== 'string') return ''
+  const rel = maybeRelative.trim()
+  if (!rel) return ''
+  if (!baseUrl || typeof baseUrl !== 'string') {
+    return /^https?:\/\//i.test(rel) ? rel : ''
+  }
+  try {
+    return new URL(rel, baseUrl).toString()
+  } catch {
+    return ''
+  }
+}
+
+const PLACEHOLDER_PATTERNS: RegExp[] = [
+  /^data:image\/svg\+xml/i,
+  /^data:image\/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==/i,
+  /^data:image\/gif;base64,R0lGODlhAQABAIAAAAAAAP\/\/\/yH5BAEAAAAALAAAAAABAAEAAAIBRAA7/i,
+  /^data:image\/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M\/?AAAAA0RRK0tqAAAAASUVORK5CYII=/i,
+  /1x1\.gif/i,
+  /transparent\.gif/i,
+  /placeholder\.(gif|png|jpe?g|svg|webp)/i,
+  /no-image/i,
+  /no_image/i,
+  /noimage/i,
+  /default-(image|product)/i,
+  /product-placeholder/i,
+  /spacer\.gif/i,
+  /blank\.(gif|png)/i,
+]
+
+/**
+ * Conservadora: devuelve true si la URL parece un placeholder de imagen
+ * (data:image/svg+xml, transparent 1x1 gif, "no-image", etc.). Ante la duda
+ * devuelve false (prefiere dejar pasar la URL).
+ */
+function isPlaceholderImage(url: string): boolean {
+  if (!url || typeof url !== 'string') return true
+  const t = url.trim()
+  if (!t) return true
+  for (const re of PLACEHOLDER_PATTERNS) {
+    if (re.test(t)) return true
+  }
+  return false
+}
+
+/**
+ * Normaliza el campo `photo.urlS3` de un producto Dropi capturado:
+ * - Resuelve paths relativos contra el CDN de CloudFront de Dropi.
+ * - Descarta placeholders/URLs vacías → deja el campo como ''.
+ *
+ * NO toca ningún otro campo del producto. Mutación in-place (devuelve el mismo
+ * objeto para permitir chaining).
+ */
+function normalizeDropiProductPhoto(p: any): any {
+  if (!p || typeof p !== 'object') return p
+  const photo = p.photo
+  if (!photo || typeof photo !== 'object') return p
+  const raw = typeof photo.urlS3 === 'string' ? photo.urlS3 : ''
+  if (!raw) {
+    // Limpia cualquier URL previa que pudiera ser placeholder/inválida.
+    if ('urlS3' in photo) photo.urlS3 = ''
+    return p
+  }
+  const resolved = resolveUrl(raw, DROPI_CLOUDFRONT_BASE)
+  if (resolved && !isPlaceholderImage(resolved)) {
+    photo.urlS3 = resolved
+  } else {
+    photo.urlS3 = ''
+  }
+  return p
+}
+
 // ---- World detection -------------------------------------------------------
 // In the MAIN world, `chrome` is undefined. In the ISOLATED world
 // (default for content scripts), chrome.runtime.id is the extension id.
@@ -366,7 +452,11 @@ async function handleProductIndex(payload: IndexPayload): Promise<void> {
     if (p && p.id != null) byId.set(String(p.id), p)
   }
   for (const p of objects) {
-    byId.set(String(p.id), p)
+    // Normalize the photo.urlS3 of each incoming product before persisting:
+    // - relative paths → CloudFront absolute URL
+    // - placeholders / empty → ''
+    const normalized = normalizeDropiProductPhoto(p)
+    byId.set(String(p.id), normalized)
   }
   let merged = Array.from(byId.values())
   if (merged.length > MAX_PRODUCTS) {
