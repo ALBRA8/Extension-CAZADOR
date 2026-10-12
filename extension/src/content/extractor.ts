@@ -18,6 +18,10 @@
 // `src/lib/normalize.ts`, `src/lib/dedup.ts` and `src/lib/structured-product.ts`.
 // The minimal subset needed here is intentionally duplicated inline to keep
 // the bundle hermetic — see those modules for the authoritative copies.
+//
+// This file is kept in sync with `src/content/extractor-core.ts` (the
+// testable ES-module version). Any logic change here MUST be applied to
+// `extractor-core.ts` too, and vice versa.
 
 /// <reference types="chrome" />
 
@@ -471,6 +475,12 @@ function isVisible(el: Element): boolean {
     // getComputedStyle can throw in some sandboxed environments; be permissive.
   }
   const rect = el.getBoundingClientRect()
+  // jsdom and other no-layout engines return all-zero rects — treat that as
+  // "visible" (we can't really tell without a layout engine; filtering
+  // everything out would break tests and content scripts in headless runs).
+  // Real browsers always return non-zero dimensions for actually visible
+  // elements.
+  if (rect.width === 0 && rect.height === 0) return true
   return rect.width > 0 && rect.height > 0
 }
 
@@ -679,8 +689,18 @@ function productFromJsonLd(node: unknown, baseUrl: string): StructuredProduct | 
     brandRaw && typeof brandRaw === 'object'
       ? pickStr((brandRaw as Record<string, unknown>).name)
       : pickStr(brandRaw)
-  const productUrl = obj.url ? resolveUrl(pickStr(obj.url), baseUrl) : ''
   const offer = parseOffer(obj.offers)
+  // Pull product URL from offer.url first (most e-commerce sites put it there),
+  // then fall back to top-level obj.url.
+  const offerUrl =
+    obj.offers && typeof obj.offers === 'object'
+      ? pickStr((obj.offers as Record<string, unknown>).url)
+      : ''
+  const productUrl = offerUrl
+    ? resolveUrl(offerUrl, baseUrl)
+    : obj.url
+      ? resolveUrl(pickStr(obj.url), baseUrl)
+      : ''
 
   const variants: ProductVariant[] = []
   const hasVariant = asArray(obj.hasVariant)
@@ -753,7 +773,10 @@ function collectJsonLdProducts(blocks: unknown[], baseUrl: string): StructuredPr
     const obj = node as Record<string, unknown>
     if (obj['@graph']) {
       queue.push(...asArray(obj['@graph']))
-      // A @graph node itself is rarely a Product; keep traversing other fields.
+      // The @graph items ARE the children we care about. Don't fall through
+      // to the generic child-enqueue loop — that would re-enqueue @graph as
+      // an array and process every node twice (producing duplicate products).
+      continue
     }
     if (isProductType(node)) {
       const p = productFromJsonLd(node, baseUrl)
@@ -968,7 +991,7 @@ function findCardName(card: Element): string {
   return ''
 }
 
-function findCardImage(card: Element): string {
+function findCardImage(card: Element, baseUrl: string): string {
   // picture first (responsive images often have webp/avif in <source>).
   const picture = card.querySelector<HTMLPictureElement>('picture')
   if (picture) {
@@ -981,9 +1004,11 @@ function findCardImage(card: Element): string {
   if (img) {
     const src = extractImageSrc(img)
     if (src && isValidImageUrl(src)) return src
-    // src may be relative; resolve against document baseURI.
-    const resolved = resolveUrl(src, document.baseURI)
-    if (resolved && isValidImageUrl(resolved)) return resolved
+    // src may be relative; resolve against the caller-provided baseUrl.
+    if (src) {
+      const resolved = resolveUrl(src, baseUrl)
+      if (resolved && isValidImageUrl(resolved)) return resolved
+    }
   }
   // background-image style as last resort.
   const bgEl = card.querySelector<HTMLElement>('[style*="background-image"]')
@@ -991,7 +1016,7 @@ function findCardImage(card: Element): string {
     const style = bgEl.getAttribute('style') || ''
     const m = style.match(/background-image:\s*url\(["']?(.*?)["']?\)/i)
     if (m && m[1]) {
-      const r = resolveUrl(m[1], document.baseURI)
+      const r = resolveUrl(m[1], baseUrl)
       if (isValidImageUrl(r)) return r
     }
   }
@@ -1080,7 +1105,7 @@ function productFromCard(
   const name = findCardName(card)
   if (!name) return null
 
-  const image = findCardImage(card)
+  const image = findCardImage(card, baseUrl)
   const price = findCardPrice(card)
   const productUrl = findCardProductUrl(card, baseUrl)
   const brand = findCardBrand(card)
@@ -1282,6 +1307,26 @@ function buildStructuredPageText(
 // ─── Main extract routine (testable — accepts doc + base URL) ──────────────
 
 function extract(doc: Document, baseUrl: string, pageUrl: string): ExtractionResult {
+  // Null/invalid document guard — never throw, return an empty result.
+  if (!doc || typeof doc !== 'object') {
+    return {
+      url: pageUrl || '',
+      title: '',
+      pageText: '',
+      detectedItems: 0,
+      structuredProducts: [],
+      diagnostics: {
+        rawCount: 0,
+        dedupedCount: 0,
+        rejectedCount: 0,
+        sourcesAttempted: [],
+        sourcesSucceeded: [],
+        warnings: ['Invalid document: doc is null or not an object'],
+        error: 'Invalid document',
+      },
+    }
+  }
+
   const startedAt =
     typeof performance !== 'undefined' && typeof performance.now === 'function'
       ? performance.now()
@@ -1295,11 +1340,13 @@ function extract(doc: Document, baseUrl: string, pageUrl: string): ExtractionRes
   sourcesAttempted.push('jsonld')
   const ldBlocks = readJsonLdBlocks(doc, warnings)
   let products: StructuredProduct[] = []
+  const authoritative: StructuredProduct[] = [] // JSON-LD + Microdata
   if (ldBlocks.length > 0) {
     const ldProducts = collectJsonLdProducts(ldBlocks, baseUrl)
     if (ldProducts.length > 0) {
       sourcesSucceeded.push('jsonld')
       products.push(...ldProducts)
+      authoritative.push(...ldProducts)
     }
   }
 
@@ -1310,6 +1357,7 @@ function extract(doc: Document, baseUrl: string, pageUrl: string): ExtractionRes
     if (mdProducts.length > 0) {
       sourcesSucceeded.push('microdata')
       products.push(...mdProducts)
+      authoritative.push(...mdProducts)
     }
   }
 
@@ -1321,28 +1369,39 @@ function extract(doc: Document, baseUrl: string, pageUrl: string): ExtractionRes
     products.push(ogProduct)
   }
 
-  // 4. DOM walk for product cards (priority 4 — complement).
-  sourcesAttempted.push('dom')
-  let domProducts: StructuredProduct[] = []
-  try {
-    domProducts = collectDomCardProducts(doc, baseUrl, warnings)
-  } catch (e) {
-    warnings.push(`DOM walk error: ${(e as Error).message}`)
-  }
-  if (domProducts.length > 0) {
-    sourcesSucceeded.push('dom')
-    products.push(...domProducts)
+  // 4. DOM walk for product cards (priority 4 — fallback when no structured
+  //    data was found). DOM cards are noisier than JSON-LD/Microdata, so we
+  //    only walk them when the structured sources produced nothing.
+  if (products.length === 0) {
+    sourcesAttempted.push('dom')
+    let domProducts: StructuredProduct[] = []
+    try {
+      domProducts = collectDomCardProducts(doc, baseUrl, warnings)
+    } catch (e) {
+      warnings.push(`DOM walk error: ${(e as Error).message}`)
+    }
+    if (domProducts.length > 0) {
+      sourcesSucceeded.push('dom')
+      products.push(...domProducts)
+    }
   }
 
-  // Validation pass: reject products without name, or without (price AND image
-  // AND productUrl). These are noise from weak DOM cards / partial OG.
+  // Validation pass:
+  // - Always reject products without name.
+  // - For DOM/OG products (non-authoritative), also require (price OR image
+  //   OR productUrl) — these sources are noisier.
+  // - JSON-LD/Microdata products are authoritative — accept if name present
+  //   even if price/image/url are missing (case: incomplete Product in JSON-LD
+  //   with only name + description).
+  const authoritativeSet = new Set(authoritative)
   const accepted: StructuredProduct[] = []
   for (const p of products) {
     if (!p || !p.name) {
       rejected.push(p)
       continue
     }
-    if (!p.price && !p.imageUrl && !p.productUrl) {
+    const isAuthoritative = authoritativeSet.has(p)
+    if (!isAuthoritative && !p.price && !p.imageUrl && !p.productUrl) {
       rejected.push(p)
       continue
     }
