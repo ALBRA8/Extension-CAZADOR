@@ -374,7 +374,23 @@ function extractHotmart(): HotmartExtractResult {
   }
 }
 
-// ─── Price lookup (Tarea 2) ─────────────────────────────────────────────────
+// ─── Price lookup (Tarea 3) ─────────────────────────────────────────────────
+//
+// Inline duplicate of the canonical `fetchHotmartPrice` in
+// `src/lib/hotmart-fetch.ts`. The content script is bundled as an IIFE so it
+// can be injected by `chrome.scripting.executeScript` — keeping a self-
+// contained copy guarantees the bundle is hermetic. Any change here MUST be
+// mirrored in the lib module (and is covered by `tests/hotmart-fetch.test.ts`).
+//
+// Bugs fixed in iter2-extractor-quality:
+//  - Added ref validation (`^[A-Za-z0-9_-]+$`) before URL interpolation to
+//    prevent path traversal (e.g. `../../admin`).
+//  - Added 8s AbortController timeout so a hung `pay.hotmart.com` request
+//    no longer blocks the SCRAPE indefinitely.
+//  - AbortError is logged distinctly from network errors for easier triage.
+
+const HOTMART_PRICE_FETCH_TIMEOUT_MS = 8000
+const HOTMART_REF_RE = /^[A-Za-z0-9_-]+$/
 
 /**
  * Fetch `https://pay.hotmart.com/{ref}` and extract the price from the element
@@ -386,13 +402,21 @@ function extractHotmart(): HotmartExtractResult {
  */
 async function fetchHotmartPrice(ref: string): Promise<string> {
   if (!ref) return ''
+  // Defense-in-depth: validate ref before interpolating into URL.
+  if (!HOTMART_REF_RE.test(ref)) {
+    console.warn(`[hotmart-extractor] invalid ref format: ${ref}`)
+    return ''
+  }
   const url = `https://pay.hotmart.com/${ref}`
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), HOTMART_PRICE_FETCH_TIMEOUT_MS)
   try {
     const res = await fetch(url, {
       method: 'GET',
       credentials: 'include',
       headers: { Accept: 'text/html,application/xhtml+xml' },
       redirect: 'follow',
+      signal: controller.signal,
     })
     if (!res.ok) {
       console.warn(`[hotmart-extractor] pay.hotmart.com ${ref} -> HTTP ${res.status}`)
@@ -425,8 +449,14 @@ async function fetchHotmartPrice(ref: string): Promise<string> {
     }
     return price
   } catch (e) {
-    console.warn(`[hotmart-extractor] fetchHotmartPrice(${ref}) failed:`, e)
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      console.warn(`[hotmart-extractor] fetchHotmartPrice(${ref}) timed out after ${HOTMART_PRICE_FETCH_TIMEOUT_MS / 1000}s`)
+    } else {
+      console.warn(`[hotmart-extractor] fetchHotmartPrice(${ref}) failed:`, e)
+    }
     return ''
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 

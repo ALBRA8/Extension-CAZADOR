@@ -25,23 +25,21 @@
 import {
   isHotmartMarketplaceUrl,
   buildHotmartSuggestion,
-  hotmartToStructured,
   type HotmartProduct,
 } from '@/lib/hotmart'
 import {
   isJVZooUrl,
   buildJVZooSuggestion,
-  jvzooToStructured,
   type JVZooProduct,
 } from '@/lib/jvzoo'
 import {
   isMuncheyeUrl,
   buildMuncheyeSuggestion,
-  muncheyeToStructured,
   type MuncheyeLaunch,
 } from '@/lib/muncheye'
 import { productsToRows, buildExtractorConfidence } from '@/lib/structured-product'
 import { parsePrice } from '@/lib/normalize'
+import { pickStructuredProducts } from '@/lib/sw-helpers'
 import type { StructuredProduct, ExtractionDiagnostics } from '@/types'
 
 const BACKEND_URL = 'http://localhost:8787'
@@ -55,6 +53,23 @@ const DASHBOARD_URL = 'http://localhost:3000'
 // window is plenty — also keeps the sidebar responsive on repeated
 // extractions without spamming the dashboard.
 const TEMPLATES_CACHE_TTL_MS = 5 * 60 * 1000
+
+// ─── Hotmart price fetch rate-limiting ──────────────────────────────────────
+// To avoid hammering `pay.hotmart.com` with 10 parallel requests (which
+// triggers Hotmart's 429 throttle and silently fails all price fetches),
+// `enrichHotmartPrices` batches requests into groups of CONCURRENCY with
+// INTER_BATCH_DELAY_MS between batches. Tuned conservatively so 10 refs take
+// ~1.5s in the worst case (3 + 3 + 3 + 1 → 3 batches × 500ms = 1.5s).
+const HOTMART_PRICE_CONCURRENCY = 3
+const HOTMART_PRICE_INTER_BATCH_DELAY_MS = 500
+// TTL for the per-ref Hotmart price cache (in `chrome.storage.local`). 5
+// minutes is a good trade-off: prices rarely move inside a single SCRAPE
+// session, but the cache shouldn't persist across long browser sessions
+// (the user might re-scrape a week later and expect fresh prices).
+const HOTMART_PRICE_CACHE_TTL_MS = 5 * 60 * 1000
+// Cap the cache map at 1000 entries (FIFO eviction) so chrome.storage.local
+// doesn't grow unbounded across months of usage.
+const HOTMART_PRICE_CACHE_MAX_ENTRIES = 1000
 
 
 // ─── Dropi bridge constants ─────────────────────────────────────────────────
@@ -83,6 +98,46 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
     .setPanelBehavior({ openPanelOnActionClick: true })
     .catch((e) => console.error('[bg] setPanelBehavior failed', e))
+})
+
+// ─── Navigation listener: invalidate stale caches ──────────────────────────
+// When the active tab navigates to a different URL, the per-URL caches
+// (`lastStructuredExtract`, `lastHotmartExtract`, `lastJVZooExtract`,
+// `lastMuncheyeExtract`) no longer apply to the new page. If we didn't
+// invalidate them, the user would land on URL B and the next SCRAPE would
+// fall back to the AI path (because the cache's URL doesn't match URL B) —
+// but the SCRAPE-PROGRESS message would still show stale "0 credits" data
+// from URL A in some sidebar states, and the user might think the extension
+// "isn't working" when they expected the zero-credit shortcut.
+//
+// Solution: listen to `chrome.tabs.onUpdated` and null out any cache whose
+// URL doesn't match the new navigation. The next EXTRACT_PAGE on the new
+// URL re-populates the caches.
+//
+// We only act when `changeInfo.url` (set on commit) OR `changeInfo.status
+// === 'complete'` (set when the new document finishes loading) is present —
+// intermediate `loading` events without a URL change are skipped to avoid
+// resetting the cache multiple times during a single navigation.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Only react when the URL is actually different from before. The `url`
+  // field in changeInfo is set on committed navigations; `status ===
+  // 'complete'` is a fallback for cases where the URL was already known
+  // when the listener fired.
+  const newUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab?.url : undefined)
+  if (!newUrl) return
+
+  if (lastStructuredExtract && lastStructuredExtract.url !== newUrl) {
+    lastStructuredExtract = null
+  }
+  if (lastHotmartExtract && lastHotmartExtract.url !== newUrl) {
+    lastHotmartExtract = null
+  }
+  if (lastJVZooExtract && lastJVZooExtract.url !== newUrl) {
+    lastJVZooExtract = null
+  }
+  if (lastMuncheyeExtract && lastMuncheyeExtract.url !== newUrl) {
+    lastMuncheyeExtract = null
+  }
 })
 
 // ─── Helper: send a JSON message to the sidebar ──────────────────────────────
@@ -405,7 +460,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           // field), map them directly to rows via `productsToRows`. This
           // skips the AI backend entirely (creditsCost = 0) and is the
           // zero-credit fast path for specialized marketplaces.
-          let structured = pickStructuredProducts(req.url)
+          let structured = pickStructuredProducts(req.url, {
+            hotmart: lastHotmartExtract,
+            jvzoo: lastJVZooExtract,
+            muncheye: lastMuncheyeExtract,
+            generic: lastStructuredExtract,
+          })
           if (structured && structured.length > 0) {
             const started = Date.now()
 
@@ -520,53 +580,82 @@ async function persistJob(job: any): Promise<void> {
 // canonical `StructuredProduct[]` directly to `Record<string, string>[]` via
 // `productsToRows`. The result is zero-credit, deterministic, and faster
 // than the AI path.
+//
+// `pickStructuredProducts` is imported from `@/lib/sw-helpers` so it can be
+// unit-tested in isolation (without mocking the service worker's chrome.*
+// listeners). The service worker passes its current cache state at call-time.
+//
+// ─── Hotmart price cache (Tarea 4) ──────────────────────────────────────────
+// `pay.hotmart.com/{ref}` is fetched up to 10× per SCRAPE on a Hotmart
+// marketplace URL. To avoid re-fetching the same refs when the user scrapes
+// the same URL twice in a row (or scrapes URL A → URL B → URL A), we cache
+// every successful price lookup in `chrome.storage.local` with a 5-minute
+// TTL. The cache is keyed by `ref` and capped at 1000 entries (FIFO eviction)
+// so storage doesn't grow unbounded.
 
 /**
- * Returns the `StructuredProduct[]` cached for `url`, or `null` if no
- * specialized extraction is available.
- *
- * Priority (first match wins):
- * 1. `lastHotmartExtract`   (Hotmart marketplace — `__NEXT_DATA__`)
- * 2. `lastJVZooExtract`     (jvzoomarket.com — `div.home-review-card`)
- * 3. `lastMuncheyeExtract`  (muncheye.com — schema.org/Product metadata)
- * 4. `lastStructuredExtract` (generic WAVE 1 extractor's structuredProducts)
- *
- * The specialized caches store the raw platform-specific shapes; we convert
- * them to canonical `StructuredProduct[]` via the `*ToStructured` mappers
- * (one mapping per source). The generic cache already stores canonical
- * `StructuredProduct[]`, so it's returned as-is.
+ * Reads a cached Hotmart price for `ref` from `chrome.storage.local`.
+ * Returns `{ amount, currency? }` if a fresh (TTL-valid) entry exists, or
+ * `null` otherwise (including on any storage error).
  */
-function pickStructuredProducts(url: string): StructuredProduct[] | null {
-  if (!url) return null
-  if (
-    lastHotmartExtract &&
-    lastHotmartExtract.url === url &&
-    lastHotmartExtract.products.length > 0
-  ) {
-    return hotmartToStructured(lastHotmartExtract.products)
-  }
-  if (
-    lastJVZooExtract &&
-    lastJVZooExtract.url === url &&
-    lastJVZooExtract.products.length > 0
-  ) {
-    return jvzooToStructured(lastJVZooExtract.products)
-  }
-  if (
-    lastMuncheyeExtract &&
-    lastMuncheyeExtract.url === url &&
-    lastMuncheyeExtract.launches.length > 0
-  ) {
-    return muncheyeToStructured(lastMuncheyeExtract.launches)
-  }
-  if (
-    lastStructuredExtract &&
-    lastStructuredExtract.url === url &&
-    lastStructuredExtract.products.length > 0
-  ) {
-    return lastStructuredExtract.products
+async function getCachedHotmartPrice(
+  ref: string,
+): Promise<{ amount: string; currency?: string } | null> {
+  if (!ref) return null
+  try {
+    const cache = await chrome.storage.local.get('hotmart_price_cache')
+    const map = (cache?.hotmart_price_cache || {}) as Record<
+      string,
+      { amount: string; currency?: string; fetchedAt: number }
+    >
+    const entry = map[ref]
+    if (
+      entry &&
+      typeof entry.amount === 'string' &&
+      entry.amount &&
+      typeof entry.fetchedAt === 'number' &&
+      Date.now() - entry.fetchedAt < HOTMART_PRICE_CACHE_TTL_MS
+    ) {
+      return { amount: entry.amount, currency: entry.currency }
+    }
+  } catch {
+    // storage.local might be unavailable in some incognito contexts — skip.
   }
   return null
+}
+
+/**
+ * Persists a Hotmart price lookup result in `chrome.storage.local` for the
+ * next SCRAPE. Cap to 1000 entries (FIFO eviction) so the storage doesn't
+ * grow unbounded across months of usage.
+ *
+ * Failures are swallowed — a cache write error never breaks the SCRAPE.
+ */
+async function cacheHotmartPrice(
+  ref: string,
+  amount: string,
+  currency?: string,
+): Promise<void> {
+  if (!ref || !amount) return
+  try {
+    const cache = await chrome.storage.local.get('hotmart_price_cache')
+    const map = (cache?.hotmart_price_cache || {}) as Record<
+      string,
+      { amount: string; currency?: string; fetchedAt: number }
+    >
+    map[ref] = { amount, currency, fetchedAt: Date.now() }
+    // FIFO eviction when the cap is exceeded.
+    const keys = Object.keys(map)
+    if (keys.length > HOTMART_PRICE_CACHE_MAX_ENTRIES) {
+      const overflow = keys.length - HOTMART_PRICE_CACHE_MAX_ENTRIES
+      for (let i = 0; i < overflow; i++) {
+        delete map[keys[i]]
+      }
+    }
+    await chrome.storage.local.set({ hotmart_price_cache: map })
+  } catch {
+    // storage.local write error — skip silently.
+  }
 }
 
 /**
@@ -576,23 +665,34 @@ function pickStructuredProducts(url: string): StructuredProduct[] | null {
  * The Hotmart specialized extractor only returns catalog metadata (title,
  * slug, ref, image, owner, rating, etc.) — Hotmart hides the actual price
  * on the pay page. To produce useful rows, we ask the hotmart-extractor
- * content script to fetch up to 10 prices in parallel (rate-limit amable:
- * max 10 concurrent fetches to pay.hotmart.com) and merge them into the
- * structured products before `productsToRows` runs.
+ * content script to fetch prices for the first 10 products and merge them
+ * into the structured products before `productsToRows` runs.
+ *
+ * Rate-limiting strategy (Tarea 2 fix):
+ *  - Previously, the SW fired 10 `FETCH_HOTMART_PRICE` messages in parallel
+ *    via `Promise.all`. Hotmart's CDN responds 429 to that pattern, silently
+ *    failing every fetch (and the SCRAPE produced rows with empty prices).
+ *  - Now we batch the refs into groups of `HOTMART_PRICE_CONCURRENCY` (=3)
+ *    with `HOTMART_PRICE_INTER_BATCH_DELAY_MS` (=500ms) between batches. 10
+ *    refs → 4 batches → 1.5s of inter-batch delays + fetch time. Plenty
+ *    under Hotmart's per-IP rate limit.
+ *  - We also consult the per-ref cache (`getCachedHotmartPrice`) before each
+ *    fetch — a cached hit avoids the network roundtrip entirely. The cache
+ *    is written back after each successful fetch.
  *
  * Behavior:
- * - Iterates `lastHotmartExtract.products` to find the refs to fetch (the
- *   canonical products have `sku = ref` after `hotmartToStructured`).
- * - Sends `{ type: 'FETCH_HOTMART_PRICE', ref }` to the hotmart-extractor
- *   content script on the active tab (must be the Hotmart marketplace page
- *   where the extractor was injected during EXTRACT_PAGE).
- * - Parses each returned price string via `parsePrice` to extract the
- *   amount and the currency (e.g. `US$230.00` → `{ amount: "230.00",
- *   currency: "USD" }`).
- * - Merges `price` and `currency` into the matching `StructuredProduct`
- *   (keyed by `sku = ref`).
- * - Returns the products unchanged on any error (a failed price fetch
- *   never fails the SCRAPE — the product just stays without a price).
+ *  - Iterates `lastHotmartExtract.products` to find the refs to fetch (the
+ *    canonical products have `sku = ref` after `hotmartToStructured`).
+ *  - For each ref: consult cache → if miss, send `FETCH_HOTMART_PRICE` to
+ *    the hotmart-extractor content script on the active tab.
+ *  - Parses each returned price string via `parsePrice` to extract the
+ *    amount and the currency (e.g. `US$230.00` → `{ amount: "230.00",
+ *    currency: "USD" }`).
+ *  - Caches the parsed `{ amount, currency }` for next time.
+ *  - Merges `price` and `currency` into the matching `StructuredProduct`
+ *    (keyed by `sku = ref`).
+ *  - Returns the products unchanged on any error (a failed price fetch
+ *    never fails the SCRAPE — the product just stays without a price).
  *
  * If the active tab is not on Hotmart or the content script is not
  * reachable, returns the products unchanged.
@@ -632,29 +732,53 @@ async function enrichHotmartPrices(
 
   if (refsToFetch.length === 0) return products
 
-  // Send FETCH_HOTMART_PRICE messages in parallel (max 10).
-  // Each response is a price string like "US$230.00" or "R$ 89,90"; we
-  // parse it via parsePrice to extract the amount + currency.
-  const fetchResults = await Promise.all(
-    refsToFetch.map(async (ref) => {
-      try {
-        const res = await chrome.tabs.sendMessage(tabId!, {
-          type: 'FETCH_HOTMART_PRICE',
-          ref,
-        })
-        if (res?.ok && typeof res.price === 'string' && res.price) {
-          const parsed = parsePrice(res.price)
-          if (parsed.amount) {
-            return { ref, amount: parsed.amount, currency: parsed.currency }
+  // Batched rate-limited fetches: 3 in parallel per batch, 500ms between
+  // batches. Each fetch consults the per-ref cache first and writes back on
+  // success. A batch never aborts the SW on partial failure — failed refs
+  // just produce `null` entries which the merge step ignores.
+  type PriceResult = { ref: string; amount: string; currency?: string } | null
+  const fetchResults: PriceResult[] = []
+  for (let i = 0; i < refsToFetch.length; i += HOTMART_PRICE_CONCURRENCY) {
+    const batch = refsToFetch.slice(i, i + HOTMART_PRICE_CONCURRENCY)
+    const batchResults: PriceResult[] = await Promise.all(
+      batch.map(async (ref): Promise<PriceResult> => {
+        try {
+          // 1. Cache short-circuit — skip the network roundtrip if we
+          // already have a fresh entry.
+          const cached = await getCachedHotmartPrice(ref)
+          if (cached) {
+            return { ref, amount: cached.amount, currency: cached.currency }
           }
+          // 2. Network fetch via the content script (the only context
+          // where `fetch('https://pay.hotmart.com/{ref}')` works with the
+          // user's cookies — service workers don't share page credentials).
+          const res = await chrome.tabs.sendMessage(tabId!, {
+            type: 'FETCH_HOTMART_PRICE',
+            ref,
+          })
+          if (res?.ok && typeof res.price === 'string' && res.price) {
+            const parsed = parsePrice(res.price)
+            if (parsed.amount) {
+              // 3. Cache for next time — best-effort, never blocks.
+              await cacheHotmartPrice(ref, parsed.amount, parsed.currency)
+              return { ref, amount: parsed.amount, currency: parsed.currency }
+            }
+          }
+          return null
+        } catch {
+          // Content script not reachable or fetch failed — skip this ref.
+          return null
         }
-        return null
-      } catch {
-        // Content script not reachable or fetch failed — skip this ref.
-        return null
-      }
-    }),
-  )
+      }),
+    )
+    fetchResults.push(...batchResults)
+    // Inter-batch delay (skip after the last batch).
+    if (i + HOTMART_PRICE_CONCURRENCY < refsToFetch.length) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, HOTMART_PRICE_INTER_BATCH_DELAY_MS),
+      )
+    }
+  }
 
   // Build ref -> { amount, currency? } map for fast lookup during merge.
   const priceByRef = new Map<string, { amount: string; currency?: string }>()
