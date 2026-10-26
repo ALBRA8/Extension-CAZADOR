@@ -1,23 +1,23 @@
-// Content script: JVZoo marketplace specialized extractor.
-// Injected by the background service worker only on jvzoomarket.com pages.
+// Content script: JVZoo marketplace and affiliate offers specialized extractor.
+// Injected by the background service worker on jvzoo.com and jvzoomarket.com pages.
 // It is bundled as a classic (import-free) script so chrome.scripting.executeScript
 // can inject it via `files: ['jvzoo-extractor.js']`.
 //
-// Selectors verified against the live https://www.jvzoomarket.com/ HTML:
-//   - Product card:    div.home-review-card
-//   - Detail URL link: a[href*="/productlibrary/review/"]   (first one wraps the cover image)
-//   - Cover image:     img.card-img-top  (inside that anchor)
-//   - Units sold:      div.badge.badge-pill.badge-light  -> "1103 Sold"
-//   - Price:           div.float-right.font-weight-bold  -> "$24.95"
-//   - Vendor:          div.font-weight-bold > a[href*="search="]  (preceded by literal "Sold By")
+// Selectors supported:
+//   - Marketplace cards:  div.home-review-card, .product-card, .library-card
+//   - Detail URL link:    a[href*="/productlibrary/review/"], a[href*="/c/"], a[href*="/b/"]
+//   - Cover image:        img.card-img-top, img.product-img, og:image
+//   - Units sold:         div.badge.badge-pill, [class*="sold"] -> "1103 Sold"
+//   - Price:              div.float-right.font-weight-bold, span.price, [class*="price"]
+//   - Vendor:             div.font-weight-bold > a[href*="search="], a[href*="vendor"], seller badge
+//   - Single Sales Page:  Automated fallback on /c/, /b/, /affiliate/ and customer portals
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // INLINE NORMALIZATION / DEDUP HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 // These helpers are intentionally duplicated inline from `src/lib/normalize.ts`
 // and `src/lib/dedup.ts` (WAVE 2). Content scripts are bundled as classic IIFE
-// scripts so they CANNOT import from `@/lib/*` at runtime. The canonical copies
-// live in those modules; keep this file in sync.
+// scripts so they CANNOT import from `@/lib/*` at runtime.
 
 interface JVZooProduct {
   title: string
@@ -26,6 +26,7 @@ interface JVZooProduct {
   vendor: string
   image_url: string
   detail_url: string
+  commission_pct?: number
 }
 
 interface ExtractionDiagnostics {
@@ -45,14 +46,10 @@ interface JVZooExtractResult {
   pageText: string
   detectedItems: number
   jvzooProducts: JVZooProduct[]
-  /**
-   * Diagnóstico del extractor (añadido en WAVE 3 — campo opcional, retrocompatible).
-   * Explica qué se extrajo, cuántos se descartaron por dedup, etc.
-   */
   diagnostics?: ExtractionDiagnostics
 }
 
-// ─── URL helpers (duplicated from lib/normalize.ts) ─────────────────────────
+// ─── URL helpers ────────────────────────────────────────────────────────────
 
 function resolveUrl(maybeRelative: string, baseUrl: string): string {
   if (!maybeRelative || typeof maybeRelative !== 'string') return ''
@@ -101,7 +98,7 @@ function normalizeProductUrl(url: string): string {
   return parsed.toString()
 }
 
-// ─── Image validation (duplicated from lib/normalize.ts) ───────────────────
+// ─── Image validation ───────────────────────────────────────────────────────
 
 const PLACEHOLDER_PATTERNS: RegExp[] = [
   /^data:image\/svg\+xml/i,
@@ -155,10 +152,7 @@ function isValidImageUrl(url: string): boolean {
   }
 }
 
-// ─── Price parsing (multi-format — duplicated from lib/normalize.ts) ───────
-// Reconoce formatos regionales: $29.99 (USD), R$ 89,90 (BRL), €19,95 (EUR),
-// US$ 230.00 (USD), 1.299,99 € (EUR), COP 28.497, etc.
-// Conserva el string crudo del amount — NO convierte el formato.
+// ─── Price parsing ─────────────────────────────────────────────────────────
 
 const SYMBOL_TO_CODE: Record<string, string> = {
   'r$': 'BRL', 'us$': 'USD', 'usd$': 'USD', 'ca$': 'CAD', 'au$': 'AUD',
@@ -170,9 +164,6 @@ const SYMBOL_TO_CODE: Record<string, string> = {
 const ISO_CODES = new Set([
   'USD', 'EUR', 'BRL', 'GBP', 'JPY', 'COP', 'MXN', 'ARS', 'CLP', 'PEN',
   'UYU', 'CAD', 'AUD', 'NZD', 'CHF', 'CNY', 'INR', 'RUB', 'KRW', 'ZAR',
-  'SGD', 'HKD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF', 'TRY', 'ILS',
-  'AED', 'SAR', 'THB', 'IDR', 'MYR', 'PHP', 'VND', 'BOB', 'PYG', 'DOP',
-  'GTQ', 'HNL', 'NIO', 'CRC', 'PAB',
 ])
 
 function parsePriceMulti(raw: string): { amount: string; currency?: string } {
@@ -183,7 +174,6 @@ function parsePriceMulti(raw: string): { amount: string; currency?: string } {
   let currency: string | undefined
   let workText = text
 
-  // 1. ISO 4217 code anywhere.
   const isoMatch = text.match(/\b([A-Z]{3})\b/g)
   if (isoMatch) {
     for (const candidate of isoMatch) {
@@ -195,7 +185,6 @@ function parsePriceMulti(raw: string): { amount: string; currency?: string } {
     }
   }
 
-  // 2. Symbol prefix/suffix.
   if (!currency) {
     const orderedSymbols = [
       'usd$', 'us$', 'ca$', 'au$', 'a$', 'nz$', 'c$', 'mx$', 'ar$', 'cl$',
@@ -220,14 +209,13 @@ function parsePriceMulti(raw: string): { amount: string; currency?: string } {
     }
   }
 
-  // 3. Amount token.
   const amountMatch = workText.match(/\d[\d.,]*\d|\d/)
   const amount = amountMatch ? amountMatch[0] : ''
   if (!amount) return { amount: '', currency: undefined }
   return { amount, currency }
 }
 
-// ─── Dedup helpers (duplicated from lib/dedup.ts, adapted for JVZooProduct) ─
+// ─── Dedup helpers ──────────────────────────────────────────────────────────
 
 function normalizeName(name: string | null | undefined): string {
   if (!name) return ''
@@ -240,10 +228,6 @@ function normalizeName(name: string | null | undefined): string {
     .trim()
 }
 
-/**
- * Cuenta los campos no vacíos de un JVZooProduct — usado para desempatar
- * duplicados (conservar el más completo).
- */
 function jvzooCompleteness(p: JVZooProduct): number {
   if (!p) return 0
   let count = 0
@@ -253,18 +237,10 @@ function jvzooCompleteness(p: JVZooProduct): number {
   if (p.vendor) count++
   if (p.image_url) count++
   if (p.detail_url) count++
+  if (p.commission_pct) count++
   return count
 }
 
-/**
- * Genera una clave de dedup para un JVZooProduct. Determinista.
- *
- * Orden de preferencia:
- * 1. `url:<detail_url-normalizada>`  si la URL del producto está presente.
- * 2. `combo:<title|vendor>`         si title + vendor están presentes
- *    (fallback cuando detail_url está vacío).
- * 3. `unique:<title>`               si no hay clave usable.
- */
 function jvzooDedupKey(p: JVZooProduct): string {
   if (!p) return 'unique:empty'
   if (p.detail_url) {
@@ -277,13 +253,6 @@ function jvzooDedupKey(p: JVZooProduct): string {
   return `unique:${name || ''}`
 }
 
-/**
- * Deduplica un array de JVZooProduct usando la misma jerarquía que
- * `lib/dedup.ts`: por detail_url normalizada, con fallback por title+vendor.
- * Conserva el que tenga más campos completos (desempata por título).
- *
- * Devuelve { deduped, discardedCount }.
- */
 function dedupJVZoo(products: JVZooProduct[]): {
   deduped: JVZooProduct[]
   discardedCount: number
@@ -302,7 +271,6 @@ function dedupJVZoo(products: JVZooProduct[]): {
     }
     const key = jvzooDedupKey(product)
 
-    // Claves `unique:*` no se comparan entre sí → siempre van aparte.
     if (key.startsWith('unique:')) {
       const idKey = `title:${normalizeName(product.title)}`
       if (buckets.has(idKey)) {
@@ -324,7 +292,6 @@ function dedupJVZoo(products: JVZooProduct[]): {
       orderedKeys.push(key)
       continue
     }
-    // Ya existe un producto con la misma clave → conservar el más completo.
     if (jvzooCompleteness(product) > jvzooCompleteness(existing)) {
       buckets.set(key, product)
     }
@@ -343,7 +310,12 @@ function dedupJVZoo(products: JVZooProduct[]): {
 
 function isJVZooHost(): boolean {
   const host = location.hostname.toLowerCase()
-  return host === 'jvzoomarket.com' || host.endsWith('.jvzoomarket.com')
+  return (
+    host === 'jvzoomarket.com' ||
+    host.endsWith('.jvzoomarket.com') ||
+    host === 'jvzoo.com' ||
+    host.endsWith('.jvzoo.com')
+  )
 }
 
 function cleanText(s: string): string {
@@ -352,21 +324,10 @@ function cleanText(s: string): string {
 
 function parseUnitsSold(text: string): number {
   if (!text) return 0
-  // Match the first integer found in the badge ("1103 Sold" -> 1103).
   const m = text.replace(/[,.\s]/g, '').match(/(\d+)/)
   return m ? parseInt(m[1], 10) || 0 : 0
 }
 
-/**
- * Parsea el texto crudo del precio a un string amount conservando el formato
- * original (no convierte "89,90" → "89.90"). Reconoce $ USD, R$ BRL, € EUR,
- * US$ USD, etc. vía `parsePriceMulti`.
- *
- * Devuelve solo el amount (sin símbolo) — el tipo JVZooProduct solo tiene
- * `price: string`. La deducción de moneda se hace aquí para futura
- * extensibilidad, pero el campo conservado es solo el amount en su formato
- * original.
- */
 function parsePrice(text: string): string {
   if (!text) return ''
   const { amount } = parsePriceMulti(text)
@@ -379,28 +340,28 @@ function extractVendorFromAnchor(a: HTMLAnchorElement | null): string {
 }
 
 function extractTitle(card: Element): string {
-  // JVZoo cards don't expose a product title; the most descriptive text is the
-  // "card-text" paragraph. We use it as a stand-in for the title, truncated.
+  const heading = card.querySelector('h1, h2, h3, h4, h5, .card-title, .product-title, .title')
+  if (heading && heading.textContent?.trim()) {
+    return cleanText(heading.textContent).slice(0, 120)
+  }
   const desc = card.querySelector('p.card-text, .jvz-font-8rem, .card-text')
   const text = cleanText(desc?.textContent || '')
   if (text) return text.slice(0, 120)
-  // Fallback: vendor + a small hint.
   const vendor = extractVendorFromAnchor(
-    card.querySelector<HTMLAnchorElement>('div.font-weight-bold a[href*="search="]'),
+    card.querySelector<HTMLAnchorElement>('div.font-weight-bold a[href*="search="], a[href*="vendor"]'),
   )
   return vendor ? `${vendor} (producto JVZoo)` : 'Producto JVZoo'
 }
 
 function extractCard(card: Element): JVZooProduct | null {
   try {
-    const detailAnchor = card.querySelector<HTMLAnchorElement>('a[href*="/productlibrary/review/"]')
+    const detailAnchor = card.querySelector<HTMLAnchorElement>(
+      'a[href*="/productlibrary/review/"], a[href*="/c/"], a[href*="/b/"], a[href*="/affiliate/"], a.product-link',
+    )
     const rawDetailUrl = detailAnchor?.getAttribute('href') || ''
-    // Normaliza URL relativa → absoluta contra location.href.
-    // Ej: /productlibrary/review/363?aid=1&tid= → https://jvzoomarket.com/productlibrary/review/363?aid=1&tid=
     const detailUrl = resolveUrl(rawDetailUrl, location.href)
 
-    const img = card.querySelector<HTMLImageElement>('img.card-img-top, img[src]')
-    // Toma el primer src/data-src válido; descarta placeholders.
+    const img = card.querySelector<HTMLImageElement>('img.card-img-top, img.product-img, img[src]')
     let imageUrl = ''
     const rawSrc =
       img?.getAttribute('src') ||
@@ -414,18 +375,27 @@ function extractCard(card: Element): JVZooProduct | null {
       }
     }
 
-    const unitsEl = card.querySelector('div.badge.badge-pill.badge-light')
+    const unitsEl = card.querySelector('div.badge.badge-pill.badge-light, .units-sold, [class*="sold"]')
     const unitsSold = parseUnitsSold(unitsEl?.textContent || '')
 
-    const priceEl = card.querySelector('div.float-right.font-weight-bold')
+    const priceEl = card.querySelector('div.float-right.font-weight-bold, span.price, .price, [class*="price"]')
     const price = parsePrice(priceEl?.textContent || '')
 
     const vendorAnchor = card.querySelector<HTMLAnchorElement>(
-      'div.font-weight-bold a[href*="search="]',
+      'div.font-weight-bold a[href*="search="], a[href*="vendor="], a[href*="/seller/"]',
     )
     const vendor = extractVendorFromAnchor(vendorAnchor)
 
+    // Check for commission badge / text
+    let commissionPct: number | undefined
+    const textAll = card.textContent || ''
+    const commMatch = textAll.match(/(\d{1,3})%\s*(?:commission|comisi[óo]n)/i)
+    if (commMatch) {
+      commissionPct = parseInt(commMatch[1], 10)
+    }
+
     const title = extractTitle(card)
+    if (!title && !price && !detailUrl) return null
 
     return {
       title,
@@ -434,6 +404,74 @@ function extractCard(card: Element): JVZooProduct | null {
       vendor,
       image_url: imageUrl,
       detail_url: detailUrl,
+      commission_pct: commissionPct,
+    }
+  } catch {
+    return null
+  }
+}
+
+function extractSinglePageProduct(): JVZooProduct | null {
+  try {
+    const h1 = document.querySelector('h1, .product-title, .main-title, h2')
+    const title = cleanText(h1?.textContent || document.title || 'Oferta JVZoo')
+
+    // Find price in page
+    let price = ''
+    const priceCandidates = Array.from(document.querySelectorAll('.price, [class*="price"], .amount, strong'))
+    for (const el of priceCandidates) {
+      const p = parsePrice(el.textContent || '')
+      if (p && parseFloat(p) > 0) {
+        price = p
+        break
+      }
+    }
+    if (!price) {
+      const bodyText = document.body.innerText || ''
+      const match = bodyText.match(/\$\s*(\d+(?:\.\d{2})?)/)
+      if (match) price = match[1]
+    }
+
+    // Hero or OG Image
+    let imageUrl = ''
+    const ogImage = document.querySelector('meta[property="og:image"]')?.getAttribute('content')
+    if (ogImage && isValidImageUrl(ogImage)) {
+      imageUrl = ogImage
+    } else {
+      const heroImg = document.querySelector<HTMLImageElement>('.product-image img, img.hero, .main-image img')
+      const src = heroImg?.getAttribute('src') || ''
+      if (src) {
+        const resolved = resolveUrl(src, location.href)
+        if (isValidImageUrl(resolved)) imageUrl = resolved
+      }
+    }
+
+    // Vendor / Author
+    let vendor = ''
+    const metaAuthor = document.querySelector('meta[name="author"]')?.getAttribute('content')
+    if (metaAuthor) {
+      vendor = cleanText(metaAuthor)
+    } else {
+      const vendorEl = document.querySelector('.vendor-name, .author, [class*="vendor"]')
+      if (vendorEl) vendor = cleanText(vendorEl.textContent || '')
+    }
+
+    // Commission
+    let commissionPct: number | undefined
+    const pageText = document.body.innerText || ''
+    const commMatch = pageText.match(/(\d{1,3})%\s*(?:commission|comisi[óo]n)/i)
+    if (commMatch) {
+      commissionPct = parseInt(commMatch[1], 10)
+    }
+
+    return {
+      title,
+      price,
+      units_sold: 0,
+      vendor,
+      image_url: imageUrl,
+      detail_url: location.href,
+      commission_pct: commissionPct,
     }
   } catch {
     return null
@@ -445,12 +483,34 @@ function extractJVZooProducts(): {
   rawCount: number
   discardedCount: number
 } {
-  const cards = Array.from(document.querySelectorAll('div.home-review-card'))
+  // 1. Check card selectors
+  const cardSelectors = [
+    'div.home-review-card',
+    'div.product-card',
+    'div.c-product-card',
+    'div.library-card',
+    'div.product-item',
+  ]
+  let cards = Array.from(document.querySelectorAll(cardSelectors.join(',')))
+  
+  // 2. If no cards, check table rows
+  if (cards.length === 0) {
+    const rows = Array.from(document.querySelectorAll('table.table tbody tr, table tr'))
+    cards = rows.filter(r => r.querySelector('a, td'))
+  }
+
   const products: JVZooProduct[] = []
   for (const card of cards) {
     const p = extractCard(card)
     if (p) products.push(p)
   }
+
+  // 3. Fallback for single sales / affiliate page
+  if (products.length === 0) {
+    const single = extractSinglePageProduct()
+    if (single) products.push(single)
+  }
+
   const rawCount = products.length
   const { deduped, discardedCount } = dedupJVZoo(products)
   return { products: deduped, rawCount, discardedCount }
@@ -460,13 +520,13 @@ function buildPageText(products: JVZooProduct[]): string {
   const parts: string[] = []
   parts.push(`TITLE: ${document.title}`)
   parts.push(`URL: ${location.href}`)
-  parts.push(`SITE: jvzoomarket.com (specialized extractor)`)
+  parts.push(`SITE: ${location.hostname} (specialized JVZoo extractor)`)
   parts.push(`JVZOO_PRODUCTS_DETECTED: ${products.length}`)
   if (products.length) {
     parts.push('--- STRUCTURED PRODUCTS ---')
     products.slice(0, 25).forEach((p, i) => {
       parts.push(
-        `[PRODUCT ${i + 1}] title="${p.title}" price="${p.price}" units_sold=${p.units_sold} vendor="${p.vendor}" image="${p.image_url}" detail="${p.detail_url}"`,
+        `[PRODUCT ${i + 1}] title="${p.title}" price="${p.price}" units_sold=${p.units_sold} vendor="${p.vendor}" image="${p.image_url}" detail="${p.detail_url}" comm="${p.commission_pct || ''}"`,
       )
     })
   }
@@ -515,7 +575,7 @@ function extract(): JVZooExtractResult {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'EXTRACT_JVZOO') {
     if (!isJVZooHost()) {
-      sendResponse({ ok: false, error: 'No es jvzoomarket.com' })
+      sendResponse({ ok: false, error: 'No es un dominio jvzoo.com o jvzoomarket.com' })
       return false
     }
     try {

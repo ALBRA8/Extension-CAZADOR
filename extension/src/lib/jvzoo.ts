@@ -15,6 +15,7 @@ export interface JVZooProduct {
   vendor: string
   image_url: string
   detail_url: string
+  commission_pct?: number
 }
 
 export interface JVZooExtractResult {
@@ -48,7 +49,7 @@ export interface FieldDefinition {
 
 // ─── URL detection ──────────────────────────────────────────────────────────
 
-const JVZOO_RE = /^https?:\/\/(?:www\.)?jvzoomarket\.com(?:\/|$)/i
+const JVZOO_RE = /^https?:\/\/(?:[a-zA-Z0-9-]+\.)?jvzoo(?:market)?\.com(?:\/|$)/i
 
 export function isJVZooUrl(url: string): boolean {
   if (!url) return false
@@ -74,9 +75,10 @@ const JVZOO_FIELD_SPECS: Array<{
   { name: 'Título', type: 'text', hint: 'Descripción / título del producto JVZoo' },
   { name: 'Precio', type: 'price', hint: 'Precio en USD (ej. 24.95)' },
   { name: 'Unidades Vendidas', type: 'number', hint: 'Número de unidades vendidas (badge "NNN Sold")' },
-  { name: 'Vendor', type: 'text', hint: 'Vendedor (texto tras "Sold By")' },
-  { name: 'Imagen', type: 'image', hint: 'URL absoluta de la imagen (card-img-top)' },
-  { name: 'URL Detalle', type: 'url', hint: 'Ruta absoluta a la página de detalle (/productlibrary/review/{id})' },
+  { name: 'Comisión %', type: 'number', hint: 'Porcentaje de comisión para afiliados (ej. 50)' },
+  { name: 'Vendor', type: 'text', hint: 'Vendedor (texto tras "Sold By" o ficha técnica)' },
+  { name: 'Imagen', type: 'image', hint: 'URL absoluta de la imagen (card-img-top / cover)' },
+  { name: 'URL Detalle', type: 'url', hint: 'Ruta absoluta a la página de detalle o link de afiliado' },
 ]
 
 /**
@@ -99,10 +101,10 @@ export function buildJVZooSuggestion(products: JVZooProduct[]): {
   }))
   return {
     fields,
-    pageCategory: 'JVZoo Marketplace',
+    pageCategory: 'JVZoo Marketplace / Affiliates',
     estimatedRows: products.length,
     reasoning:
-      'Extractor especializado JVZoo: datos extraídos directamente de div.home-review-card (sin IA). 100% precisión; sin consumo de créditos en la fase de sugerencia.',
+      'Extractor especializado JVZoo: datos extraídos directamente de las páginas y fichas de JVZoo (sin IA). 100% precisión; sin consumo de créditos en la fase de sugerencia.',
   }
 }
 
@@ -124,7 +126,7 @@ export function buildJVZooSuggestion(products: JVZooProduct[]): {
  * - productUrl: detail_url
  * - brand: vendor
  * - source: 'jvzoo'
- * - extras: `{ units_sold: String(units_sold) }`
+ * - extras: `{ units_sold: String(units_sold), commission_pct: String(commission_pct) }`
  * - extractionStatus: 'complete'
  */
 export function jvzooToStructured(products: JVZooProduct[]): StructuredProduct[] {
@@ -142,6 +144,7 @@ export function jvzooToStructured(products: JVZooProduct[]): StructuredProduct[]
       source: 'jvzoo',
       extras: {
         ...(p.units_sold != null && { units_sold: String(p.units_sold) }),
+        ...(p.commission_pct != null && { commission_pct: String(p.commission_pct) }),
       },
       extractionStatus: 'complete' as const,
     }
