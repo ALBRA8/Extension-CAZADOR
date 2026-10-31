@@ -1,18 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Cazador — AI Web Scraper",
-  "version": "0.1.0",
-  "description": "Cazador — Scrapea cualquier web con IA en 2 clics. Sugerencia automática de columnas, créditos transparentes y export a CSV/Excel.",
+  "version": "0.2.0",
+  "description": "Cazador — Scrapea cualquier web con IA en 2 clics. Sugerencia automática de columnas, créditos transparentes, export a CSV/Excel y fusión con NEX-SCOPE (mesh webhook + YouTube context menus).",
   "default_locale": "es",
   "permissions": [
     "sidePanel",
     "activeTab",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "contextMenus",
+    "notifications"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "https://nexscope.example.com/*",
+    "https://www.youtube.com/*",
+    "https://*.youtube.com/*"
   ],
   "action": {
     "default_title": "Abrir Cazador"
@@ -30,7 +35,7 @@
     "128": "icons/icon-128.png"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8787 http://localhost:3000 https://*"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8787 http://localhost:3000 https://nexscope.example.com https://*.youtube.com https://*"
   },
   "content_scripts": [
     {

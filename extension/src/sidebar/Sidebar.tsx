@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { TemplateMatchBanner } from '@/components/TemplateMatchBanner'
 import { DropiConnectionBanner } from '@/components/DropiConnectionBanner'
+import NexscopeSettings from '@/sidebar/NexscopeSettings'
 import { useState } from 'react'
 
 // Matches https://app.dropi.<LATAM-TLD>/ — the SPA hosts where the
@@ -135,6 +136,13 @@ export function Sidebar() {
           </>
         )}
       </main>
+
+      <details className="cz-nexscope-settings" style={{ marginTop: '12px', padding: '8px', borderTop: '1px solid var(--cz-border)' }}>
+        <summary style={{ cursor: 'pointer', fontSize: '12px', color: 'var(--cz-muted)' }}>
+          ⚙️ Conexión NEX-SCOPE
+        </summary>
+        <NexscopeSettings />
+      </details>
 
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)} />}
     </div>

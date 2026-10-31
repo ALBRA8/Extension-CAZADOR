@@ -43,6 +43,7 @@ import {
 import { productsToRows, buildExtractorConfidence } from '@/lib/structured-product'
 import { parsePrice } from '@/lib/normalize'
 import type { StructuredProduct, ExtractionDiagnostics } from '@/types'
+import { registerContextMenus, handleContextMenuItemClick } from './context-menus'
 
 const BACKEND_URL = 'http://localhost:8787'
 
@@ -83,6 +84,9 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel
     .setPanelBehavior({ openPanelOnActionClick: true })
     .catch((e) => console.error('[bg] setPanelBehavior failed', e))
+
+  // NEX-SCOPE fusion: register 4 YouTube context menus. Idempotent.
+  registerContextMenus()
 })
 
 // ─── Helper: send a JSON message to the sidebar ──────────────────────────────
@@ -299,6 +303,12 @@ async function extractActiveTab(): Promise<{
 }
 
 // ─── Main message router ─────────────────────────────────────────────────────
+// Route right-click clicks on YouTube channel/video links to the handler.
+// Must be top-level so it survives service-worker restarts (MV3 evicts SW).
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  void handleContextMenuItemClick(info, tab)
+})
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   ;(async () => {
     try {
